@@ -41,6 +41,8 @@
 #include "util-var.h"
 #include "util-debug.h"
 #include "util-unittest.h"
+#include "util-bloomfilter.h"
+#include "detect-engine.h"
 
 /* get the flowbit with idx from the flow */
 static FlowBit *FlowBitGet(Flow *f, uint32_t idx)
@@ -67,6 +69,10 @@ static void FlowBitAdd(Flow *f, uint32_t idx)
         fb->type = DETECT_FLOWBITS;
         fb->idx = idx;
         fb->next = NULL;
+        int len = snprintf(NULL, 0, "%d", idx);
+        char *str = malloc(len + 1);
+        snprintf(str, len + 1, "%d", idx);
+        VariableStoreAddToBloomFilter((const char *)str);
         GenericVarAppend(&f->flowvar, (GenericVar *)fb);
     }
 }
@@ -113,6 +119,26 @@ int FlowBitIsset(Flow *f, uint32_t idx)
     return r;
 }
 
+int FlowBitIssetFromArray(Flow *f, uint32_t *or_list, uint8_t len_arr)
+{
+    const BloomFilter *bf = VariableStoreGetBloomFilter();
+    for (int i = 0; i < len_arr; i++) {
+        int len = snprintf(NULL, 0, "%d", or_list[i]);
+        char *str = malloc(len + 1);
+        snprintf(str, len + 1, "%d", or_list[i]);
+        if (BloomFilterTest(bf, (const char *)str, strlen(str)) == 0) {
+            SCLogInfo("Didn't find set in bloomfilter: %d, idx: %s", or_list[i], str);
+            continue;
+        }
+        FlowBit *fb = FlowBitGet(f, or_list[i]);
+        if (fb != NULL) {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 int FlowBitIsnotset(Flow *f, uint32_t idx)
 {
     int r = 0;
@@ -123,6 +149,25 @@ int FlowBitIsnotset(Flow *f, uint32_t idx)
     }
 
     return r;
+}
+
+int FlowBitIsnotsetFromArray(Flow *f, uint32_t *or_list, uint8_t len_arr)
+{
+    const BloomFilter *bf = VariableStoreGetBloomFilter();
+    for (int i = 0; i < len_arr; i++) {
+        int len = snprintf(NULL, 0, "%d", or_list[i]);
+        char *str = malloc(len + 1);
+        snprintf(str, len + 1, "%d", or_list[i]);
+        if (BloomFilterTest(bf, (const char *)str, strlen(str)) == 0) {
+            continue;
+        }
+        FlowBit *fb = FlowBitGet(f, or_list[i]);
+        if (fb == NULL) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 void FlowBitFree(FlowBit *fb)
@@ -142,14 +187,21 @@ static int FlowBitTest01 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
-
     FlowBit *fb = FlowBitGet(&f,0);
     if (fb != NULL)
         ret = 1;
 
     GenericVarFree(f.flowvar);
+    DetectEngineCtxFree(de_ctx);
     return ret;
 }
 
@@ -174,6 +226,13 @@ static int FlowBitTest03 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
 
@@ -193,6 +252,7 @@ static int FlowBitTest03 (void)
         ret = 1;
     }
 end:
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -203,6 +263,13 @@ static int FlowBitTest04 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -213,6 +280,7 @@ static int FlowBitTest04 (void)
     if (fb != NULL)
         ret = 1;
 
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -223,6 +291,13 @@ static int FlowBitTest05 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -233,6 +308,7 @@ static int FlowBitTest05 (void)
     if (fb != NULL)
         ret = 1;
 
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -243,6 +319,13 @@ static int FlowBitTest06 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -253,6 +336,7 @@ static int FlowBitTest06 (void)
     if (fb != NULL)
         ret = 1;
 
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -263,6 +347,13 @@ static int FlowBitTest07 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -273,6 +364,7 @@ static int FlowBitTest07 (void)
     if (fb != NULL)
         ret = 1;
 
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -283,6 +375,13 @@ static int FlowBitTest08 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -303,6 +402,7 @@ static int FlowBitTest08 (void)
 
     ret = 1;
 end:
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -313,6 +413,13 @@ static int FlowBitTest09 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -333,6 +440,7 @@ static int FlowBitTest09 (void)
 
     ret = 1;
 end:
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -343,6 +451,13 @@ static int FlowBitTest10 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -363,6 +478,7 @@ static int FlowBitTest10 (void)
 
     ret = 1;
 end:
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
@@ -373,6 +489,13 @@ static int FlowBitTest11 (void)
 
     Flow f;
     memset(&f, 0, sizeof(Flow));
+    DetectEngineCtx *de_ctx = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    VarNameStoreActivateStaging();
+
+    de_ctx->flags |= DE_QUIET;
 
     FlowBitAdd(&f, 0);
     FlowBitAdd(&f, 1);
@@ -393,6 +516,7 @@ static int FlowBitTest11 (void)
 
     ret = 1;
 end:
+    DetectEngineCtxFree(de_ctx);
     GenericVarFree(f.flowvar);
     return ret;
 }
