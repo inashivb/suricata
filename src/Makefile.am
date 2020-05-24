@@ -430,6 +430,7 @@ util-atomic.c util-atomic.h \
 util-base64.c util-base64.h \
 util-bloomfilter-counting.c util-bloomfilter-counting.h \
 util-bloomfilter.c util-bloomfilter.h \
+util-hwloc.c util-hwloc.h \
 util-bpf.c util-bpf.h \
 util-buffer.c util-buffer.h \
 util-byte.c util-byte.h \
