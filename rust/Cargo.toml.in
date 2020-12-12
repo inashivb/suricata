@@ -32,6 +32,7 @@ num-traits = "~0.2.14"
 widestring = "~0.4.3"
 flate2 = "~1.0.19"
 brotli = "~3.3.0"
+mailparse = "0.13.1"
 
 sawp-modbus = "~0.5.0"
 sawp = "~0.5.0"

@@ -1,0 +1,92 @@
+extern crate mailparse;
+
+use mailparse::*;
+
+pub fn is_header_parsable(data: &[u8]) -> bool {
+    let headers = parse_headers(&data);
+    if headers.is_ok() {
+        return true;
+    }
+    false
+}
+
+pub fn parse_line(data: &[u8]) -> Result<(Vec<MailHeader>, usize), MailParseError> {
+    parse_headers(&data)
+}
+
+pub fn is_ctnt_attachment(h: &Vec<MailHeader>) -> bool {
+    let dispos = parse_content_disposition(h.get_value());
+    if dispos.disposition == DispositionType::Attachment {
+        return true;
+    }
+    false
+}
+
+pub fn is_parsable(data: &[u8]) -> bool {
+    let parsed = parse_mail(&data);
+    if parsed.is_ok() {
+        // Set some flag here
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod test {
+    use mailparse::*;
+
+    #[test]
+    fn test_mime_full_msg_parse() {
+        let parsed = parse_mail(concat!(
+            "Subject: This is a test email\n",
+            "Content-Type: multipart/alternative; boundary=foobar\n",
+            "Date: Sun, 02 Oct 2016 07:06:22 -0700 (PDT)\n",
+            "\n",
+            "--foobar\n",
+            "Content-Type: text/plain; charset=utf-8\n",
+            "Content-Transfer-Encoding: quoted-printable\n",
+            "\n",
+            "This is the plaintext version, in utf-8. Proof by Euro: =E2=82=AC\n",
+            "--foobar\n",
+            "Content-Type: text/html\n",
+            "Content-Transfer-Encoding: base64\n",
+            "\n",
+            "PGh0bWw+PGJvZHk+VGhpcyBpcyB0aGUgPGI+SFRNTDwvYj4gdmVyc2lvbiwgaW4g \n",
+            "dXMtYXNjaWkuIFByb29mIGJ5IEV1cm86ICZldXJvOzwvYm9keT48L2h0bWw+Cg== \n",
+            "--foobar--\n",
+            "After the final boundary stuff gets ignored.\n").as_bytes())
+            .unwrap();
+        assert_eq!(parsed.headers.get_first_value("Subject"),
+            Some("This is a test email".to_string()));
+        assert_eq!(parsed.subparts.len(), 2);
+        assert_eq!(parsed.subparts[0].get_body().unwrap(),
+            "This is the plaintext version, in utf-8. Proof by Euro: \u{20AC}");
+        assert_eq!(parsed.subparts[1].headers[1].get_value(), "base64");
+        assert_eq!(parsed.subparts[1].ctype.mimetype, "text/html");
+        assert!(parsed.subparts[1].get_body().unwrap().starts_with("<html>"));
+        assert_eq!(dateparse(parsed.headers.get_first_value("Date").unwrap().as_str()).unwrap(), 1475417182);
+    }
+
+    #[test]
+    fn test_mime_header_parse() {
+        let parsed = parse_mail("From: Sender2\r\nTo: Recipient2\r\nSubject: subject2\r\nContent-Type: text/plain\r\n\r\nLine 1\r\nLine 2\r\nLine 3\r\n".as_bytes()).unwrap();
+        assert_eq!(parsed.headers.get_first_value("From"), Some("Sender2".to_string()));
+    }
+
+    #[test]
+    fn test_mime_filename_parse() {
+        let parsed = parse_mail("Content-Disposition: attachment; filename=\"12characters12characters12characters.exe\";somejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsdsomejunkasfdasfsafasafdsasdasassdssdsd".as_bytes()).unwrap();
+        let headers = std::str::from_utf8(parsed.get_headers().get_raw_bytes()).unwrap();
+        let ctype = parse_content_type(&headers);
+        assert_eq!(ctype.params.get("filename").unwrap().len(), 40);
+    }
+
+    #[test]
+    fn test_mime_filename_long_parse() {
+        let parsed = parse_mail("Content-Disposition: attachment; filename=\"12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters12characters.exe\"".as_bytes()).unwrap();
+        let headers = std::str::from_utf8(parsed.get_headers().get_raw_bytes()).unwrap();
+        let ctype = parse_content_type(&headers);
+        // TODO in C filename is restricted to 256, should the limit be applied here?
+        assert_eq!(ctype.params.get("filename").unwrap().len(), 280);
+    }
+}
