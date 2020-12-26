@@ -16,6 +16,7 @@
  */
 
 use std;
+use nom::number::streaming::{le_u8};
 
 fn parse_len(input: &str) -> Result<u32, std::num::ParseIntError> {
     input.parse::<u32>()
@@ -29,14 +30,91 @@ named!(pub parse_message<String>,
            msg:  take_str!(len) >>
                (
                    msg.to_string()
-               )
-       ));
+    )));
+
+#[derive(Debug, PartialEq)]
+pub struct DummyState {
+    pub val: u8,
+    pub val1: u8,
+}
+
+impl DummyState {
+    pub fn new() -> DummyState {
+        DummyState {
+            val: 0,
+            val1: 0,
+        }
+    }
+}
+
+named!(pub parse_line<DummyState>,
+       do_parse!(
+           take_till!(|a| a == 0x0a)
+           >> i: peek!(bits!(tag_bits!(8usize, 0x0a)))
+           >> cond!(i == 0x0a, take!(1))
+           >> val: le_u8
+           >> val1: le_u8
+           >> (
+            DummyState {
+                val: val,
+                val1: val1
+            })
+    ));
 
 #[cfg(test)]
 mod tests {
 
     use nom::*;
     use super::*;
+
+    #[test]
+    fn test_tag_exists() {
+        let buf: &[u8] = &[0x12, 0xa1, 0x0a, 0x23, 0xb3,];
+        let result  = parse_line(buf);
+        match result {
+            Ok((rem, ret)) => {
+                let expected = DummyState {
+                    val: 0x23,
+                    val1: 0xb3
+                };
+                println!("buf: {:?}", buf);
+                assert_eq!(ret, expected);
+            }
+            Err(Err::Incomplete(_)) => {
+                panic!("Result should not have been incomplete.");
+            }
+            Err(Err::Error(err)) => {
+                panic!("Result should not be an error: {:?}.", err);
+            }
+            Err(Err::Failure(err)) => {
+                panic!("Result should not be a failure: {:?}.", err);
+            }
+        }
+    }
+
+    fn test_tag_no_exists() {
+        let buf: &[u8] = &[0x12, 0xa1, 0x23, 0xb3,];
+        let result  = parse_line(buf);
+        match result {
+            Ok((rem, ret)) => {
+                let expected = DummyState {
+                    val: 0x23,
+                    val1: 0xb3
+                };
+                println!("buf: {:?}", buf);
+                assert_eq!(ret, expected);
+            }
+            Err(Err::Incomplete(_)) => {
+                panic!("Result should not have been incomplete.");
+            }
+            Err(Err::Error(err)) => {
+                panic!("Result should not be an error: {:?}.", err);
+            }
+            Err(Err::Failure(err)) => {
+                panic!("Result should not be a failure: {:?}.", err);
+            }
+        }
+    }
 
     /// Simple test of some valid data.
     #[test]
