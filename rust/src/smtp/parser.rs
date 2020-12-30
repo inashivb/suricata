@@ -47,12 +47,17 @@ impl DummyState {
     }
 }
 
+// Maybe just look for newline beforehand and send the slice after that
+// TODO try again to do as much operations as possible in the parser
 named!(pub parse_line<DummyState>,
        do_parse!(
-           take_till!(|a| a == 0x0a)
-           >> i: peek!(bits!(tag_bits!(8usize, 0x0a)))
-           >> cond!(i == 0x0a, take!(1))
-           >> val: le_u8
+//             tag!(b"\n") is not the right thing as it looks for the seq in the beginning and
+//             consumes it
+//           >> cond!(i == true, take_till!(|a| a == 0x0a))
+//           re_bytes_find!(b"\n")
+//           >> cond!(newline, take_till!(|a| a == 0x0a))
+//           >> take!(1)
+           val: le_u8
            >> val1: le_u8
            >> (
             DummyState {
@@ -68,33 +73,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tag_exists() {
+    fn test_parse_line() {
         let buf: &[u8] = &[0x12, 0xa1, 0x0a, 0x23, 0xb3,];
-        let result  = parse_line(buf);
-        match result {
-            Ok((rem, ret)) => {
-                let expected = DummyState {
-                    val: 0x23,
-                    val1: 0xb3
-                };
-                println!("buf: {:?}", buf);
-                assert_eq!(ret, expected);
-            }
-            Err(Err::Incomplete(_)) => {
-                panic!("Result should not have been incomplete.");
-            }
-            Err(Err::Error(err)) => {
-                panic!("Result should not be an error: {:?}.", err);
-            }
-            Err(Err::Failure(err)) => {
-                panic!("Result should not be a failure: {:?}.", err);
-            }
-        }
-    }
-
-    fn test_tag_no_exists() {
-        let buf: &[u8] = &[0x12, 0xa1, 0x23, 0xb3,];
-        let result  = parse_line(buf);
+        let idx = buf.iter().position(|&x| x == 0x0a).unwrap();
+        let result  = parse_line(&buf[idx + 1..]);
         match result {
             Ok((rem, ret)) => {
                 let expected = DummyState {
