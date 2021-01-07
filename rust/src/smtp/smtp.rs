@@ -1,4 +1,4 @@
-/* Copyright (C) 2018-2020 Open Information Security Foundation
+/* Copyright (C) 2021 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -20,11 +20,190 @@ use crate::core::{self, ALPROTO_SMTP, AppProto, Flow, IPPROTO_TCP};
 use std::mem::transmute;
 use crate::applayer::{self, *};
 use crate::filecontainer::*;
+use crate::conf::*;
 use std::ffi::CString;
 use nom;
 use super::parser;
 
 static mut ALPROTO_SMTP: AppProto = ALPROTO_SMTP;
+/* content-limit default value */
+pub const FILEDATA_CONTENT_LIMIT: u32 = 100000;
+/* content-inspect-min-size default value */
+pub const FILEDATA_CONTENT_INSPECT_MIN_SIZE: u32 = 32768;
+pub const FILEDATA_CONTENT_INSPECT_WINDOW: u8 = 4096;
+pub const SMTP_RAW_EXTRACTION_DEFAULT_VALUE: u8 = 0;
+pub const SMTP_MAX_REQUEST_AND_REPLY_LINE_LENGTH: u8 = 510;
+pub const SMTP_COMMAND_BUFFER_STEPS: u8 = 5;
+/* we are in process of parsing a fresh command.  Just a placeholder.  If we
+ * are not in STATE_COMMAND_DATA_MODE, we have to be in this mode */
+pub const SMTP_PARSER_STATE_COMMAND_MODE: u8 = 0x00;
+/* we are in mode of parsing a command's data.  Used when we are parsing tls
+ * or accepting the rfc 2822 mail after DATA command */
+pub const SMTP_PARSER_STATE_COMMAND_DATA_MODE: u8 = 0x01;
+/* Used when we are still in the process of parsing a server command.  Used
+ * with multi-line replies and the stream is fragmented before all the lines
+ * for a response is seen */
+pub const SMTP_PARSER_STATE_PARSING_SERVER_RESPONSE: u8 = 0x02;
+pub const SMTP_PARSER_STATE_FIRST_REPLY_SEEN: u8 = 0x04;
+pub const SMTP_PARSER_STATE_PARSING_MULTILINE_REPLY: u8 = 0x08;
+pub const SMTP_PARSER_STATE_PIPELINING_SERVER: u8 = 0x10;
+/* Various SMTP commands
+ * We currently have var-ified just STARTTLS and DATA, since we need to them
+ * for state transitions.  The rest are just indicate as OTHER_CMD.  Other
+ * commands would be introduced as and when needed */
+pub const SMTP_COMMAND_STARTTLS: u8 = 1;
+pub const SMTP_COMMAND_DATA: u8 = 2;
+pub const SMTP_COMMAND_BDAT: u8 = 3;
+/* not an actual command per se, but the mode where we accept the mail after
+ * DATA has it's own reply code for completion, from the server.  We give this
+ * stage a pseudo command of it's own, so that we can add this to the command
+ * buffer to match with the reply */
+pub const SMTP_COMMAND_DATA_MODE: u8 = 4;
+pub const SMTP_COMMAND_OTHER_CMD: u8 = 5;
+pub const SMTP_COMMAND_RSET: u8 = 6;
+/* Different EHLO extensions.  Not used now. */
+pub const SMTP_EHLO_EXTENSION_PIPELINING;
+pub const SMTP_EHLO_EXTENSION_SIZE;
+pub const SMTP_EHLO_EXTENSION_DSN;
+pub const SMTP_EHLO_EXTENSION_STARTTLS;
+pub const SMTP_EHLO_EXTENSION_8BITMIME;
+/* MIME Error codes */
+pub const MIME_DEC_OK: u8 = 0;
+pub const MIME_DEC_MORE: u8 = 1;
+pub const MIME_DEC_ERR_DATA = -1;
+pub const MIME_DEC_ERR_MEM = -2;
+pub const MIME_DEC_ERR_PARSE = -3;
+pub const MIME_DEC_ERR_STATE = -4;
+
+enum DecoderEvent {
+    SMTP_DECODER_EVENT_INVALID_REPLY,
+    SMTP_DECODER_EVENT_UNABLE_TO_MATCH_REPLY_WITH_REQUEST,
+    SMTP_DECODER_EVENT_MAX_COMMAND_LINE_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_MAX_REPLY_LINE_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_INVALID_PIPELINED_SEQUENCE,
+    SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE,
+    SMTP_DECODER_EVENT_TLS_REJECTED,
+    SMTP_DECODER_EVENT_DATA_COMMAND_REJECTED,
+
+    /* MIME Events */
+    SMTP_DECODER_EVENT_MIME_PARSE_FAILED,
+    SMTP_DECODER_EVENT_MIME_MALFORMED_MSG,
+    SMTP_DECODER_EVENT_MIME_INVALID_BASE64,
+    SMTP_DECODER_EVENT_MIME_INVALID_QP,
+    SMTP_DECODER_EVENT_MIME_LONG_LINE,
+    SMTP_DECODER_EVENT_MIME_LONG_ENC_LINE,
+    SMTP_DECODER_EVENT_MIME_LONG_HEADER_NAME,
+    SMTP_DECODER_EVENT_MIME_LONG_HEADER_VALUE,
+    SMTP_DECODER_EVENT_MIME_BOUNDARY_TOO_LONG,
+    SMTP_DECODER_EVENT_MIME_LONG_FILENAME,
+
+    /* Invalid behavior or content */
+    SMTP_DECODER_EVENT_DUPLICATE_FIELDS,
+    SMTP_DECODER_EVENT_UNPARSABLE_CONTENT,
+}
+
+/* smtp reply codes.  If an entry is made here, please make a simultaneous
+ * entry in smtp_reply_map */
+enum SMTPCode {
+    SMTP_REPLY_211,
+    SMTP_REPLY_214,
+    SMTP_REPLY_220,
+    SMTP_REPLY_221,
+    SMTP_REPLY_235,
+    SMTP_REPLY_250,
+    SMTP_REPLY_251,
+    SMTP_REPLY_252,
+
+    SMTP_REPLY_334,
+    SMTP_REPLY_354,
+
+    SMTP_REPLY_421,
+    SMTP_REPLY_450,
+    SMTP_REPLY_451,
+    SMTP_REPLY_452,
+    SMTP_REPLY_455,
+
+    SMTP_REPLY_500,
+    SMTP_REPLY_501,
+    SMTP_REPLY_502,
+    SMTP_REPLY_503,
+    SMTP_REPLY_504,
+    SMTP_REPLY_550,
+    SMTP_REPLY_551,
+    SMTP_REPLY_552,
+    SMTP_REPLY_553,
+    SMTP_REPLY_554,
+    SMTP_REPLY_555,
+};
+
+pub fn smtp_decode_event(t: u8) -> String {
+    match t {
+        SMTP_DECODER_EVENT_INVALID_REPLY => "INVALID_REPLY",
+        SMTP_DECODER_EVENT_UNABLE_TO_MATCH_REPLY_WITH_REQUEST => "UNABLE_TO_MATCH_REPLY_WITH_REQUEST",
+        SMTP_DECODER_EVENT_MAX_COMMAND_LINE_LEN_EXCEEDED => "MAX_COMMAND_LINE_LEN_EXCEEDED",
+        SMTP_DECODER_EVENT_MAX_REPLY_LINE_LEN_EXCEEDED => "MAX_REPLY_LINE_LEN_EXCEEDED",
+        SMTP_DECODER_EVENT_INVALID_PIPELINED_SEQUENCE => "INVALID_PIPELINED_SEQUENCE",
+        SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED => "BDAT_CHUNK_LEN_EXCEEDED",
+        SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE => "NO_SERVER_WELCOME_MESSAGE",
+        SMTP_DECODER_EVENT_TLS_REJECTED => "TLS_REJECTED",
+        SMTP_DECODER_EVENT_DATA_COMMAND_REJECTED => "DATA_COMMAND_REJECTED",
+
+        /* MIME Events */
+        SMTP_DECODER_EVENT_MIME_PARSE_FAILED => "MIME_PARSE_FAILED",
+        SMTP_DECODER_EVENT_MIME_MALFORMED_MSG => "MIME_MALFORMED_MSG",
+        SMTP_DECODER_EVENT_MIME_INVALID_BASE64 => "MIME_INVALID_BASE64",
+        SMTP_DECODER_EVENT_MIME_INVALID_QP => "MIME_INVALID_QP",
+        SMTP_DECODER_EVENT_MIME_LONG_LINE => "MIME_LONG_LINE",
+        SMTP_DECODER_EVENT_MIME_LONG_ENC_LINE => "MIME_LONG_ENC_LINE",
+        SMTP_DECODER_EVENT_MIME_LONG_HEADER_NAME => "MIME_LONG_HEADER_NAME",
+        SMTP_DECODER_EVENT_MIME_LONG_HEADER_VALUE => "MIME_LONG_HEADER_VALUE",
+        SMTP_DECODER_EVENT_MIME_BOUNDARY_TOO_LONG => "MIME_LONG_BOUNDARY",
+        SMTP_DECODER_EVENT_MIME_LONG_FILENAME => "MIME_LONG_FILENAME",
+
+        /* Invalid behavior or content */
+        SMTP_DECODER_EVENT_DUPLICATE_FIELDS => "DUPLICATE_FIELDS",
+        SMTP_DECODER_EVENT_UNPARSABLE_CONTENT => "UNPARSABLE_CONTENT",
+        _ => {
+            return (t).to_string();
+        }
+    }
+    .to_string()
+}
+
+pub smtp_reply(t: u8) -> String {
+    match t {
+        SMTP_REPLY_211 => "211",
+        SMTP_REPLY_214 => "214",
+        SMTP_REPLY_220 => "220",
+        SMTP_REPLY_221 => "221",
+        SMTP_REPLY_235 => "235",
+        SMTP_REPLY_250 => "250",
+        SMTP_REPLY_251 => "251",
+        SMTP_REPLY_252 => "252",
+
+        SMTP_REPLY_334 => "334",
+        SMTP_REPLY_354 => "354",
+
+        SMTP_REPLY_421 => "421",
+        SMTP_REPLY_450 => "450",
+        SMTP_REPLY_451 => "451",
+        SMTP_REPLY_452 => "452",
+        SMTP_REPLY_455 => "455",
+
+        SMTP_REPLY_500 => "500",
+        SMTP_REPLY_501 => "501",
+        SMTP_REPLY_502 => "502",
+        SMTP_REPLY_503 => "503",
+        SMTP_REPLY_504 => "504",
+        SMTP_REPLY_550 => "550",
+        SMTP_REPLY_551 => "551",
+        SMTP_REPLY_552 => "552",
+        SMTP_REPLY_553 => "553",
+        SMTP_REPLY_554 => "554",
+        SMTP_REPLY_555 => "555",
+    }.to_string()
+}
 
 pub struct SMTPTransaction {
     tx_id: u64,
@@ -64,6 +243,38 @@ impl Drop for SMTPTransaction {
     }
 }
 
+pub struct MimeDecConfig {
+    decode_base64: i32,
+    decode_quoted_printable: i32,
+    extract_urls: i32,
+    bode_md5: i32,
+    header_value_depth: u32,
+}
+
+pub struct SMTPConfig {
+    decode_mime: i32,
+    mime_config: Option<MimeDecConfig>,
+    content_lim: u32,
+    content_inspect_min_size: u32,
+    content_inspect_window: u32,
+    sbcfg: Option<StreamingBufferConfig>,  // TODO figure out implementation of this struct
+}
+
+impl SMTPConfig {
+    pub fn new() -> SMTPConfig {
+        SMTPConfig {
+            decode_mime: 0,
+            mime_config: None,
+            content_lim: 0,
+            content_inspect_min_size: 0,
+            content_inspect_window: 0,
+            sbcfg: None,
+        }
+    }
+}
+
+pub smtp_config = SMTPConfig::new();
+
 pub struct SMTPState {
     tx_id: u64,
     transactions: Vec<SMTPTransaction>,
@@ -97,7 +308,7 @@ impl SMTPState {
     pub fn new() -> Self {
         Self {
             tx_id: 0,
-            9transactions: Vec::new(),
+            transactions: Vec::new(),
             request_gap: false,
             response_gap: false,
             direction: 0,
@@ -171,6 +382,53 @@ impl SMTPState {
             }
         }
         None
+    }
+
+    fn set_event(e: u8) {
+        if let Some(cur_tx) = self.get_cur_tx() {
+            // TODO AppLayerDecoderEventsSetEventRaw(&s->curr_tx->decoder_events, e);
+            return;
+        }
+    }
+
+    fn set_mime_events() {
+        if self.get_cur_tx().unwrap().mime_state.msg == None {
+            return;
+        }
+        // Generate decoder events
+        // TODO MimeDecEntity *msg = state->curr_tx->mime_state->msg;
+        match msg.anomaly_flags {
+            ANOM_INVALID_BASE64 => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_INVALID_BASE64);
+            },
+            ANOM_INVALID_QP => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_INVALID_QP);
+            },
+            ANOM_LONG_LINE => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_LONG_LINE);
+            },
+            ANOM_LONG_ENC_LINE => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_LONG_ENC_LINE);
+            },
+            ANOM_LONG_HEADER_NAME => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_LONG_HEADER_NAME);
+            },
+            ANOM_LONG_HEADER_VALUE => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_LONG_HEADER_VALUE);
+            },
+            ANOM_MALFORMED_MSG => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_MALFORMED_MSG);
+            },
+            ANOM_LONG_BOUNDARY => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_BOUNDARY_TOO_LONG);
+            },
+            ANOM_LONG_FILENAME => {
+                self.set_event(SMTP_DECODER_EVENT_MIME_LONG_FILENAME);
+            },
+            _ => {
+
+            }
+        }
     }
 
     fn get_line(&mut self, input: &[u8]) -> i8 {
@@ -289,15 +547,51 @@ impl SMTPState {
         0
     }
 
+    pub fn process_data_chunk(chunk: u8, len: u32) -> i8 {
+        let ret = MIME_DEC_OK;
+        // TODO lots of filecontainer stuff here
+        let files: FileContainer;
+
+        // FInd mime header and if found set begin to 1 and end to 0
+
+        // TODO see if this unsafe block can be brought out of state impl
+        let flags = unsafe { FileFlowToFlags(flow, STREAM_TOSERVER) };
+        // we depend on detection engine for file pruning
+        flags |= FILE_USE_DETECT;
+
+        // Find file
+        // From Wikipedia: 
+        // Def 1: BEST WAY TO FIGURE OUT IF ITS AN ATTACHMENT
+        // In addition to the presentation style, the field Content-Disposition
+        // also provides parameters for specifying the name of the file, the creation date and 
+        // modification date, which can be used by the reader's mail user agent to store the 
+        // attachment.
+        // Def 2:
+        // text plus attachments (multipart/mixed with a text/plain part and other non-text 
+        // parts). A MIME message including an attached file generally indicates the file's 
+        // original name with the field "Content-Disposition", so that the type of file is 
+        // indicated both by the MIME content-type and the (usually OS-specific) filename extension
+        //
+        // TODO get mime from chunk
+        if mime.get_param("multipart").is_some() {
+            if self.files_ts.is_none() {
+                self.files_ts = FileContainer::new();
+            }
+            files = self.files_ts;
+
+        }
+
+    }
+
     fn insert_cmd_into_buf(cmd: u8) -> i8 {
         if self.cmds.len() >= self.cmds_buf_len {
-            let inc = SMTP_COMMAND_BUFFER_STEPS; // TODO add macro
-            if self.cmds_buf_len + SMTP_COMMAND_BUFFER_STEPS > USHRT_MAX { // TODO add macro + ushrt max equivalent
-                inc = USHRT_MAX - self.cmds_buf_len; // TODO finss ushrt_max equivalent
+            let inc = SMTP_COMMAND_BUFFER_STEPS;
+            if self.cmds_buf_len + SMTP_COMMAND_BUFFER_STEPS > u8::MAX {
+                inc = u8::MAX - self.cmds_buf_len;
             }
             self.cmds_buf_len += inc;
         }
-        if self.cmds.len() >= 1 && (self.cmds.last() == SMTP_COMMAND_STARTTLS || self.cmds.last() == SMTP_COMMAND_DATA) { // TODO add macros
+        if self.cmds.len() >= 1 && (self.cmds.last() == SMTP_COMMAND_STARTTLS || self.cmds.last() == SMTP_COMMAND_DATA) {
             // decoder event
             self.set_event(SMTP_DECODER_EVENT_INVALID_PIPELINED_SEQUENCE);
             /* we have to have EHLO, DATA, VRFY, EXPN, TURN, QUIT, NOOP,
@@ -313,25 +607,25 @@ impl SMTPState {
     }
 
     fn process_cmd_data() -> i8 {
-        if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) { // TODO add macro
+        if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {
             /* looks like are still waiting for a confirmation from the server */
             return 0;
         }
         if self.current_line_len == 1 && self.current_line[0] == '.' {
-            self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE; // TODO add macro
+            self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE;
             /* kinda like a hack.  The mail sent in DATA mode, would be
             * acknowledged with a reply.  We insert a dummy command to
             * the command buffer to be used by the reply handler to match
             * the reply received */
-            self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE); // TODO impl this function and add macro
+            self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE); // TODO impl this function
             if smtp_config.raw_extraction {
                 /* we use this as the signal that message data is complete. */
                 // TODO FileCloseFile(state->files_ts, NULL, 0, 0);
             } else if smtp_config.decode_mime && self.get_cur_tx().unwrap().mime_state != NULL { // TODO global smtp_config + mime_State
                 // Complete parsing task
                 // TODO let ret  = MimeDecParseComplete(state->curr_tx->mime_state);
-                if ret != MIME_DEC_OK { // TODO add macro
-                    self.set_event(SMTP_DECODER_EVENT_MIME_PARSE_FAILED); // TODO add macro
+                if ret != MIME_DEC_OK {
+                    self.set_event(SMTP_DECODER_EVENT_MIME_PARSE_FAILED);
                 }
                 // Generate decoder events
                 // TODO SetMimeEvents(state);
@@ -349,11 +643,11 @@ impl SMTPState {
                 // TODO int ret = MimeDecParseLine((const uint8_t *) state->current_line,
                 //    state->current_line_len, state->current_line_delimiter_len,
                 //    state->curr_tx->mime_state);
-                if ret != MIME_DEC_OK { // TODO add macro
-                    if ret != MIME_DEC_ERR_STATE { // TODO add macro
+                if ret != MIME_DEC_OK {
+                    if ret != MIME_DEC_ERR_STATE {
                         // Generate decoder events
                         // TODO SetMimeEvents(state);
-                        self.set_event(SMTP_DECODER_EVENT_MIME_PARSE_FAILED); // TODO add macro
+                        self.set_event(SMTP_DECODER_EVENT_MIME_PARSE_FAILED);
                     }
                     /* keep the parser in its error state so we can log that,
                     * the parser will reject new data */
@@ -365,9 +659,9 @@ impl SMTPState {
     fn process_cmd_bdat(&mut self) -> i8 {
         self.bdat_chunk_idx += self.current_line_len + self.current_line_delim_len;
         if self.bdat_chunk_idx > self.bdat_chunk_len {
-            self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE; // TODO add macro
+            self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE;
             // decoder event
-            self.set_event(SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED); // TODO add macro
+            self.set_event(SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED);
             return -1;
         } else if self.bdat_chunk_idx == self.bdat_chunk_len {
             self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE;
@@ -423,7 +717,7 @@ impl SMTPState {
     }
 
     fn no_new_tx(&mut self) -> i8 {
-        if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) { // TODO add macro
+        if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {
             if self.current_line_len >= 4 {
                 if self.current_line.matches("rset") || self.current_line.matches("quit") {
                     return 1;
@@ -448,23 +742,23 @@ impl SMTPState {
                 // TODO StreamTcpReassemblySetMinInspectDepth stuff
                 let ts_dcount = self.current_line_len + self.current_line_delim_len;
                 let cur_line_lc = self.current_line.to_lowercase();
-                if !(self.parser_state & SMTP_PARSER_STATE_FIRST_REPLY_SEEN) {// TODO add this macro
+                if !(self.parser_state & SMTP_PARSER_STATE_FIRST_REPLY_SEEN) {
                     self.set_event(SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE); // TODO impl set_event fn
                 }
                  /* there are 2 commands that can push it into this COMMAND_DATA mode - STARTTLS and DATA */
                 if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {// TODO add tis macro
                     // TODO design: maybe cur_line_lc switch would make more sense
                     if self.current_line_len >= 8 && cur_line_lc.matches("starttls") {
-                        self.current_cmd = SMTP_COMMAND_STARTTLS; // TODO add this macro
+                        self.current_cmd = SMTP_COMMAND_STARTTLS;
                     } else if self.current_line_len >=4 && cur_line_lc.matches("data") {
-                        self.current_cmd = SMTP_COMMAND_DATA; // TODO add this macro
+                        self.current_cmd = SMTP_COMMAND_DATA;
                         if smtp_config.raw_extraction { // TODO Figure how to work wit a global
                             let msgname = "rawmsg";
                             if self.files_ts == None {
                                 self.files_ts = FileContainer::default();
                             }
                             if self.transactions.len() > 1 && !tx.done {
-                                self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT); // TODO add this macro
+                                self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
                                 FileContainer::file_close();  // TODO figure out FileCloseFile without a track id
                                 let new_tx = self.new_tx();
                                 self.transactions.push(new_tx);
@@ -474,8 +768,8 @@ impl SMTPState {
                             }
                         } else if smtp_config.decode_mime { // TODO figure out globals
                             if tx.mime_state { // TODO check how mime crate fits in here
-                                tx.mime_state.state_floag = PARSE_ERROR; // TODO mime and macro
-                                self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT); // TODO add this macro
+                                tx.mime_state.state_flag = PARSE_ERROR; // TODO mime and macro
+                                self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
                                 let new_tx =self.new_tx();
                                 self.transactions.push(new_tx);
                             }
@@ -494,46 +788,46 @@ impl SMTPState {
                         if self.parser_state & SMTP_PARSER_STATE_PIPELINING_SERVER {
                             self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
                         }
-                    } else if state.current_line_len >= 4 && cur_line_lc.matches("bdat") {
+                    } else if self.current_line_len >= 4 && cur_line_lc.matches("bdat") {
                         // TODO add SMTPParseCommandBDAT
-                        self.current_cmd = SMTP_COMMAND_BDAT; // TODO add macro
-                        self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE; // TODO add macro
+                        self.current_cmd = SMTP_COMMAND_BDAT;
+                        self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
                     } else if self.current_line_len >= 4 && (cur_line_lc.matches("helo") || cur_line_lc.matches("ehlo")) {
                         if self.parse_cmd_helo() == -1 {
                             return -1;
                         }
-                        self.current_cmd = SMTP_COMMAND_OTHER_CMD; // TODO add macro
-                    } else if state.current_line_len >= 9 && cur_line_lc.matches("mail from") {
+                        self.current_cmd = SMTP_COMMAND_OTHER_CMD;
+                    } else if self.current_line_len >= 9 && cur_line_lc.matches("mail from") {
                         if self.parse_cmd_mail_from() == -1 {
                             return -1;
                         }
-                        self.current_cmd = SMTP_COMMAND_OTHER_CMD; // TODO add macro
-                    } else if state.current_line_len >= 7 && cur_line_lc.matches("rcpt to") {
+                        self.current_cmd = SMTP_COMMAND_OTHER_CMD;
+                    } else if self.current_line_len >= 7 && cur_line_lc.matches("rcpt to") {
                         if self.parse_cmd_rcpt_to() == -1 {
                             return -1;
                         }
-                        self.current_cmd = SMTP_COMMAND_OTHER_CMD; // TODO add macro
-                    } else if state.current_line_len >= 4 && cur_line_lc.matches("rset") {
+                        self.current_cmd = SMTP_COMMAND_OTHER_CMD;
+                    } else if self.current_line_len >= 4 && cur_line_lc.matches("rset") {
                         // Resets chunk index in case of connection reuse
                         self.bdat_chunk_idx = 0;
-                        self.current_cmd = SMTP_COMMAND_RSET; // TODO add macro
+                        self.current_cmd = SMTP_COMMAND_RSET;
                     } else {
-                        self.current_cmd = SMTP_COMMAND_OTHER_CMD; // TODO add macro
+                        self.current_cmd = SMTP_COMMAND_OTHER_CMD;
                     }
                     /* Every command is inserted into a command buffer, to be matched
                     * against reply(ies) sent by the server */
-                    // TODO add SMTPInsertCommandIntoCommandBuffer
+                    self.insert_cmd_into_buf(self.current_cmd);
                     return 0;
                 }
                 match self.current_cmd {
                     SMTP_COMMAND_STARTTLS => {
-                        // TODO SMTPProcessCommandSTARTTLS
+                        self.process_cmd_starttls();
                     },
                     SMTP_COMMAND_DATA => {
-                        // TODO SMTPProcessCommandDATA
+                        self.process_cmd_data();
                     },
                     SMTP_COMMAND_BDAT => {
-                        // TODO SMTPProcessCommandBDAT
+                        self.process_cmd_bdat();
                     }
                     _ => {
                         /* we have nothing to do with any other command at this instant.
@@ -671,7 +965,46 @@ impl SMTPState {
     }
 }
 
-/// Probe for a valid header.
+fn smtp_configure() {
+    let conf = ConfNode::get_child_value("app-layer.protocols.smtp.mime");
+    match conf {
+        Some(val) => {
+            let bool_config_keys = vec!["decode-mime", "decode-base64", "decode-quoted-printable", "extract-urls", "body-md5"];
+            for i in bool_config_keys.iter() {}
+            // TODO maybe dict way like below won't work, will have to make a struct
+                smtp_config[i] = ConfNode::get_child_bool(i); // TODO global smtp_config
+            }
+            smtp_config["header-value-depth"] = ConfNode::get_child_bool("header-value-depth")
+        },
+        None => {}
+    }
+
+    // TODO Pass mime config data to MimeDec API
+    // MimeDecSetConfig(&smtp_config.mime_config);
+    smtp_config.content_limit = FILEDATA_CONTENT_LIMIT;
+    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+
+    // TODO child value maybe incorrect here, check again
+    let conf = ConfNode::get_child_value("app-layer.protocols.smtp.inspected-tracker");
+    match conf {
+        Some(val) => {
+            // TODO loop over the child keys and get values
+            // leaving todo to confirm if child value fn does the right thing
+        },
+        None => {}
+    }
+    smtp_config.sbcfg.buf_size = content_limit ? content_limit : 256;
+    if ConfNode::get_child_bool("app-layer.protocols.smtp.raw-extraction") != true {
+        smtp_config.raw_extraction = SMTP_RAW_EXTRACTION_DEFAULT_VALUE;
+    }
+    if smtp_config.raw_extraction && smtp_config.decode_mime {
+        smtp_config.raw_extraction = 0;
+    }
+    0
+}
+
+/// TODO Probe for a valid header.
 ///
 /// As this smtp protocol uses messages prefixed with the size
 /// as a string followed by a ':', we look at up to the first 10
