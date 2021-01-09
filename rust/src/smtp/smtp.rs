@@ -75,6 +75,15 @@ pub const MIME_DEC_ERR_MEM = -2;
 pub const MIME_DEC_ERR_PARSE = -3;
 pub const MIME_DEC_ERR_STATE = -4;
 
+pub static mut SURICATA_SMTP_FILE_CONFIG: Option<&'static SuricataFileContext> = None;
+
+#[no_mangle]
+pub extern "C" fn rs_smtp_init(context: &'static mut SuricataFileContext) {
+    unsafe {
+        SURICATA_SMTP_FILE_CONFIG = Some(context);
+    }
+}
+
 enum DecoderEvent {
     SMTP_DECODER_EVENT_INVALID_REPLY,
     SMTP_DECODER_EVENT_UNABLE_TO_MATCH_REPLY_WITH_REQUEST,
@@ -575,12 +584,58 @@ impl SMTPState {
         // TODO get mime from chunk
         if mime.get_param("multipart").is_some() {
             if self.files_ts.is_none() {
-                self.files_ts = FileContainer::new();
+                self.files_ts = FileContainer::default();
             }
             files = self.files_ts;
-
+            // if header was parsed properly set body start do the following
+            if dec_state.body_start {
+                // print file content
+                /* Set storage flag if applicable since only the first file in the
+                 * flow seems to be processed by the 'filestore' detector */
+                if (files->head != NULL && (files->head->flags & FILE_STORE)) {
+                    flags |= FILE_STORE; // TODO add this macro
+                }
+                let depth = smtp_config.content_inspect_min_size + self.ts_data_cnt - self.ts_last_datastamp;
+                // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth)
+                unsafe {
+                    files.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(), &0 /* track ID TODO*/, &chunk, flags);
+                }
+                // TODO SMTPNewFile
+                /* If close in the same chunk, then pass in empty bytes */
+                // TODO set body end to true if all the data (not just header but body) was parsed
+                // successfully
+                if dec_state.body_end {
+                    files.file_close(&0 /* track ID TODO */, flags);
+                    depth = self.ts_data_cnt - self.ts_last_datastamp;
+                    // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
+                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                }
+            } else if dec_state.body_end {
+                files.file_close(&0 /* track ID TODO */, flags);
+                depth = self.ts_data_cnt - self.ts_last_datastamp;
+                // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
+                // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+            } else {
+                /* Append data chunk to file */
+                files.file_append(&0 /* track ID TODO */, chunk, 0 /* is_gap TODO */);
+                if files.tail && files.tail.content_inspected == 0 && files.tail.size >= smtp_config.content_inspect_min_size {
+                    depth = smtp_config.content_inspect_min_size + self.ts_data_cnt - self.ts_last_data_stamp;
+                    // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
+                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                    /* after the start of the body inspection, disable the depth logic */
+                } else if files.tail && files.tail.content_inspected > 0 {
+                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                /* expand the limit as long as we get file data, as the file data is bigger on the
+                 * wire due to base64 */
+                } else {
+                    depth = smtp_config.content_inspect_min_size + self.ts_data_cnt - self.ts_last_data_stamp;
+                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                }
+            }
+        } else {
+            // print body is not a ctnt_attachment
         }
-
+        return 0;
     }
 
     fn insert_cmd_into_buf(cmd: u8) -> i8 {
@@ -599,7 +654,7 @@ impl SMTPState {
         }
 
         // there's a todo in C code here, ask about it
-        if self.cmds.len() + 1 > USHRT_MAX {
+        if self.cmds.len() + 1 > u8::MAX {
             return -1;
         }
         self.cmds.push(cmd);
@@ -617,10 +672,10 @@ impl SMTPState {
             * acknowledged with a reply.  We insert a dummy command to
             * the command buffer to be used by the reply handler to match
             * the reply received */
-            self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE); // TODO impl this function
+            self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE);
             if smtp_config.raw_extraction {
                 /* we use this as the signal that message data is complete. */
-                // TODO FileCloseFile(state->files_ts, NULL, 0, 0);
+                state->files_ts.unwrap().file_close(0 /* TODO track ID */, 0);
             } else if smtp_config.decode_mime && self.get_cur_tx().unwrap().mime_state != NULL { // TODO global smtp_config + mime_State
                 // Complete parsing task
                 // TODO let ret  = MimeDecParseComplete(state->curr_tx->mime_state);
@@ -628,7 +683,7 @@ impl SMTPState {
                     self.set_event(SMTP_DECODER_EVENT_MIME_PARSE_FAILED);
                 }
                 // Generate decoder events
-                // TODO SetMimeEvents(state);
+                self.set_mime_events();
             }
             // TODO SMTPTransactionComplete(state)
         } else if smtp_config.raw_extraction {
@@ -681,7 +736,13 @@ impl SMTPState {
         0
     }
 
-    // fn parse_cmd_w_param(&mut self, pref) TODO try to make this into a nom parser
+    fn parse_cmd_w_param(&mut self, pref: u8, target: &[u8]) -> i32 {
+        let i = pref + 1;
+        let i = self.current_line.filter(|&(idx, _)| idx > i).iter().position(|&x| x != ' '); // TODO recheck this
+        let spc_i = self.current_line.filter(|&(idx, _)| idx > i).iter().position(|&x| x != ' '); // TODO recheck this
+        target = target[..spc_i - i + 1];
+        0
+    }
 
     fn parse_cmd_helo(&mut self) -> i8 {
         let cur_tx = self.get_cur_tx().unwrap();
@@ -689,7 +750,7 @@ impl SMTPState {
             self.set_event(SMTP_DECODER_EVENT_DUPLICATE_FIELDS);
             return 0;
         }
-        // TODO impl SMTPParseCommandWithParam       
+        self.parse_cmd_w_param(4, self.helo);
     }
 
     fn parse_cmd_mail_from(&mut self) -> i8 {
@@ -698,20 +759,14 @@ impl SMTPState {
             self.set_event(SMTP_DECODER_EVENT_DUPLICATE_FIELDS);
             return 0;
         }
-        // TODO impl SMTPParseCommandWithParam
-    }  
+        self.parse_cmd_w_param(9, cur_tx.mail_from);
+    }
 
     fn parse_cmd_rcpt_to(&mut self) -> i8 {
-        // TODO impl SMTPParseCommandWithParam
-        match res {
-            Some(rcpt) => {
-                let cur_tx = self.get_cur_tx().unwrap();
-                cur_tx.rcpt_to.push(rcpt);
-            },
-            None => {
-                return -1;
-            }
-        }
+        let rcpt_to;
+        self.parse_cmd_w_param(7, &rcpt_to);
+        let cur_tx = self.get_cur_tx().unwrap();
+        cur_tx.rcpt_to.push(rcpt_to);
         // all goes well
         return 0;
     }
@@ -743,30 +798,30 @@ impl SMTPState {
                 let ts_dcount = self.current_line_len + self.current_line_delim_len;
                 let cur_line_lc = self.current_line.to_lowercase();
                 if !(self.parser_state & SMTP_PARSER_STATE_FIRST_REPLY_SEEN) {
-                    self.set_event(SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE); // TODO impl set_event fn
+                    self.set_event(SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE);
                 }
                  /* there are 2 commands that can push it into this COMMAND_DATA mode - STARTTLS and DATA */
-                if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {// TODO add tis macro
+                if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {
                     // TODO design: maybe cur_line_lc switch would make more sense
                     if self.current_line_len >= 8 && cur_line_lc.matches("starttls") {
                         self.current_cmd = SMTP_COMMAND_STARTTLS;
                     } else if self.current_line_len >=4 && cur_line_lc.matches("data") {
                         self.current_cmd = SMTP_COMMAND_DATA;
-                        if smtp_config.raw_extraction { // TODO Figure how to work wit a global
+                        if smtp_config.raw_extraction {
                             let msgname = "rawmsg";
                             if self.files_ts == None {
                                 self.files_ts = FileContainer::default();
                             }
                             if self.transactions.len() > 1 && !tx.done {
                                 self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
-                                FileContainer::file_close();  // TODO figure out FileCloseFile without a track id
+                                self.files_ts.unwrap().file_close(0 /* Track ID TODO */, 0 /* flags TODO */);
                                 let new_tx = self.new_tx();
                                 self.transactions.push(new_tx);
                             }
-                            if FileContainer::file_open() { // TODO figure out this operation
+                            if self.files_ts.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(), &0 /* track ID TODO*/, msgname, FILE_NOMD5|FILE_NOMAGIC|FILE_USE_DETECT) { // TODO these macros
                                 self.new_file(); // TODO Implement this function
                             }
-                        } else if smtp_config.decode_mime { // TODO figure out globals
+                        } else if smtp_config.decode_mime {
                             if tx.mime_state { // TODO check how mime crate fits in here
                                 tx.mime_state.state_flag = PARSE_ERROR; // TODO mime and macro
                                 self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
@@ -789,7 +844,7 @@ impl SMTPState {
                             self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
                         }
                     } else if self.current_line_len >= 4 && cur_line_lc.matches("bdat") {
-                        // TODO add SMTPParseCommandBDAT
+                        self.parse_cmd_bdat();
                         self.current_cmd = SMTP_COMMAND_BDAT;
                         self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
                     } else if self.current_line_len >= 4 && (cur_line_lc.matches("helo") || cur_line_lc.matches("ehlo")) {
