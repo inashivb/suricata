@@ -108,6 +108,10 @@ pub type SCFileCloseFileById = extern "C" fn (
         track_id: u32,
         data: *const u8, data_len: u32,
         flags: u16) -> i32;
+pub type SCFileSetInspectSizes = extern "C" fn (
+        file: &FileContainer,
+        win: u32,
+        min: u32);
 pub type SCFileAppendDataById = extern "C" fn (
         file_container: &FileContainer,
         track_id: u32,
@@ -143,6 +147,7 @@ pub struct SuricataContext {
 
     pub FileOpenFile: SCFileOpenFileWithId,
     pub FileCloseFile: SCFileCloseFileById,
+    pub FileSetInspectSizes: SCFileSetInspectSizes,
     pub FileAppendData: SCFileAppendDataById,
     pub FileAppendGAP: SCFileAppendGAPById,
     pub FileContainerRecycle: SCFileContainerRecycle,

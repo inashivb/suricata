@@ -136,6 +136,15 @@ impl FileContainer {
 
     }
 
+    pub fn file_set_inspect_sizes(&mut self, win: u32, min: u32) {
+        match unsafe {SC} {
+            None => panic!("BUG no suricata_config"),
+            Some(c) => {
+                (c.FileSetInspectSizes)(&self, win, min);
+            }
+        }
+    }
+
     pub fn files_prune(&mut self) {
         SCLogDebug!("FILECONTAINER: pruning");
         match unsafe {SC} {
