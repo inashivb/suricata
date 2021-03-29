@@ -1,34 +1,78 @@
 extern crate mailparse;
 
 use mailparse::*;
+use mailparse::headers::Headers;
 
-pub fn is_header_parsable(data: &[u8]) -> bool {
-    let headers = parse_headers(&data);
-    if headers.is_ok() {
-        return true;
-    }
-    false
+
+//impl std::fmt::Debug for MimeDecode<'_> {
+//    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//        f.debug_struct("MimeDecode")
+//            .field("parsable_headers", &self.parsable_headers)
+//            .field("parsable_body", &self.parsable_body)
+//            .field("ctnt_attachment", &self.ctnt_attachment)
+//            .field("headers", &self.headers)
+//            .finish()
+//    }
+//}
+//
+//#[derive(Debug, Clone)]
+//pub struct MimeDecode<'a> {
+//    pub parsable_headers: bool,
+//    pub parsable_body: bool,
+//    pub ctnt_attachment: bool,
+//    pub headers: Option<Headers<'a>>,
+//}
+//
+//impl<'a> MimeDecode<'a> {
+//    pub fn new() -> MimeDecode<'a> {
+//        MimeDecode {
+//            parsable_headers: false,
+//            parsable_body: false,
+//            ctnt_attachment: false,
+//            headers: None,
+//        }
+//    }
+//}
+//
+//
+//pub fn parse(data: &[u8]) -> i8 {
+//    let mut mime_dec = MimeDecode::new();
+//    match parse_mail(&data) {
+//        Ok(val) => {
+//            mime_dec.parsable_headers = true;
+//            mime_dec.parsable_body = true;
+//            mime_dec.headers = Some(val.get_headers());
+//            mime_dec.ctnt_attachment = if val.headers.get_all_values("Content-Disposition").len() > 0 { true } else { false };
+//        }
+//        _ => {
+//            return -1;
+//        }
+//    }
+//    1
+//}
+
+#[derive(Debug)]
+pub struct MimeDecode {
+    pub parsable_headers: bool,
+    pub parsable_body: bool,
+    pub ctnt_attachment: bool,
+    pub headers: Option<Vec<u8>>,
 }
 
-pub fn parse_line(data: &[u8]) -> Result<(Vec<MailHeader>, usize), MailParseError> {
-    parse_headers(&data)
+
+impl MimeDecode {
+    pub fn new() -> MimeDecode {
+        MimeDecode {
+            parsable_headers: false,
+            parsable_body: false,
+            ctnt_attachment: false,
+            headers: None,
+        }
+    }
 }
 
-pub fn is_ctnt_attachment(h: &Vec<MailHeader>) -> bool {
-    let dispos = parse_content_disposition(h.get_value());
-    if dispos.disposition == DispositionType::Attachment {
-        return true;
-    }
-    false
-}
-
-pub fn is_parsable(data: &[u8]) -> bool {
-    let parsed = parse_mail(&data);
-    if parsed.is_ok() {
-        // Set some flag here
-        return true;
-    }
-    false
+pub fn parse(data: &[u8]) -> i8 {
+    1
 }
 
 #[cfg(test)]

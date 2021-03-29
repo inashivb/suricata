@@ -49,7 +49,7 @@ impl Files {
 
 pub struct File;
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct FileContainer {
     head: * mut c_void,
     tail: * mut c_void,
