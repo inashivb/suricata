@@ -263,7 +263,7 @@ pub fn smtp_reply(t: u8) -> String {
 //            tx_data: AppLayerTxData::new(),
 //        }
 //    }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SMTPTransaction {
     tx_id: u64,
     pub request: Option<String>,
@@ -275,7 +275,7 @@ pub struct SMTPTransaction {
     rcpt_to: Vec<String>,
     de_state: Option<*mut core::DetectEngineState>,
     events: *mut core::AppLayerDecoderEvents,
-    tx_data: AppLayerTxData,
+//    tx_data: AppLayerTxData, TODO doesn't have Clone impl, gives errors on fields, long chain
 }
 
 impl SMTPTransaction {
@@ -291,7 +291,7 @@ impl SMTPTransaction {
             rcpt_to: Vec::new(),
             de_state: None,
             events: std::ptr::null_mut(),
-            tx_data: AppLayerTxData::new(),
+//            tx_data: AppLayerTxData::new(),
         }
     }
 
@@ -375,6 +375,7 @@ impl SMTPConfig {
 }
 
 //pub struct SMTPState<'a> {
+#[derive(Debug)]
 pub struct SMTPState {
     tx_id: u64,
 //    transactions: Vec<SMTPTransaction<'a>>,
@@ -457,7 +458,7 @@ impl SMTPState {
     }
 
 //    pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction<'a>> {
-    pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction> {
+    pub fn get_tx(&mut self, tx_id: u64) -> Option<mut SMTPTransaction> {
         for tx in &mut self.transactions {
             if tx.tx_id == tx_id + 1 {
                 return Some(tx);
@@ -467,7 +468,7 @@ impl SMTPState {
     }
 
 //    pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction<'a>> {
-    pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction> {
+    pub fn get_cur_tx(&mut self) -> Option<mut SMTPTransaction> {
         let tx_id = self.tx_id;
         self.get_tx(tx_id)
     }

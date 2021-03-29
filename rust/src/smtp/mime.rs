@@ -51,7 +51,7 @@ use mailparse::headers::Headers;
 //    1
 //}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MimeDecode {
     pub parsable_headers: bool,
     pub parsable_body: bool,

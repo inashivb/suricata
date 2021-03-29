@@ -17,5 +17,5 @@
 
 pub mod smtp;
 pub mod mime;
-mod parser;
-pub mod logger;
+//mod parser;
+//pub mod logger;
