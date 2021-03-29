@@ -458,7 +458,7 @@ impl SMTPState {
     }
 
 //    pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction<'a>> {
-    pub fn get_tx(&mut self, tx_id: u64) -> Option<mut SMTPTransaction> {
+    pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction> {
         for tx in &mut self.transactions {
             if tx.tx_id == tx_id + 1 {
                 return Some(tx);
@@ -468,7 +468,7 @@ impl SMTPState {
     }
 
 //    pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction<'a>> {
-    pub fn get_cur_tx(&mut self) -> Option<mut SMTPTransaction> {
+    pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction> {
         let tx_id = self.tx_id;
         self.get_tx(tx_id)
     }
