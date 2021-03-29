@@ -316,7 +316,7 @@ impl SMTPTransaction {
     }
 
     pub fn new_file(&mut self, file: &mut FileContainer, smtp_config: SMTPConfig) {
-        debug_validate_bug_on!(file.is_none());
+        //debug_validate_bug_on!(file.is_none());
         let tx_id = self.tx_id;
         self.flag_detect_state_new_file();
         FileContainer::file_set_txid_on_last_file(file, tx_id);
@@ -402,7 +402,7 @@ pub struct SMTPState {
     cmds_buf_len: u16,
     cmds_idx: u16,
     helo: Vec<u8>,
-    files_ts: Option<FileContainer>,
+    files: Files,
     file_track_id: u32,
 }
 
@@ -434,7 +434,7 @@ impl SMTPState {
             cmds_buf_len: 0,
             cmds_idx: 0,
             helo: Vec::new(),
-            files_ts: None,
+            files: Files::new(),
             file_track_id: 0,
         }
     }
@@ -659,10 +659,19 @@ impl SMTPState {
         0
     }
 
+    pub fn get_tx_with_files(&mut self)
+        -> Option<(&mut SMTPTransaction, &mut FileContainer, u16)>
+    {
+        //let tx = self.get_cur_tx().unwrap();
+        let tx_ref = self.transactions.last_mut();
+        let (files, flags) = self.files.get(STREAM_TOSERVER);
+        return Some((tx_ref.unwrap(), files, flags));
+    }
+
     pub fn process_data_chunk(&mut self, smtp_config: SMTPConfig, chunk: &[u8], len: u32, flags: &mut u16) -> i8 {
         let ret = MIME_DEC_OK;
         let mut depth = 0;
-        let mut files: FileContainer;
+        //let mut files: FileContainer;
 
         // TODO bring this out in the request method
         // let flags = unsafe { FileFlowToFlags(flow, STREAM_TOSERVER) };
@@ -682,63 +691,59 @@ impl SMTPState {
         // original name with the field "Content-Disposition", so that the type of file is 
         // indicated both by the MIME content-type and the (usually OS-specific) filename extension
         //
-        let cur_tx = self.get_cur_tx().unwrap();
-        let mime_dec = cur_tx.mime_decoder.as_ref().unwrap();
-        let files_ts = self.files_ts;
-        if mime_dec.ctnt_attachment == true {
-            if files_ts.is_none() {
-                self.files_ts = Some(FileContainer::default());
-            }
-            files = files_ts.unwrap();
-            if mime_dec.headers.is_some() {
-                if mime_dec.parsable_body {
-                    // TODO print file content
-                    /* Set storage flag if applicable since only the first file in the
-                     * flow seems to be processed by the 'filestore' detector */
-//                    if (files.head.is_some() && (files.head.flags & FILE_STORE)) {
-//                        flags |= FILE_STORE; // TODO add this macro
-//                    }
-                    depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
-                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth)
-                    unsafe {
-                        files.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(), &0 /* track ID TODO*/, &chunk, *flags);
-                    }
-                    // TODO SMTPNewFile
-                    /* If close in the same chunk, then pass in empty bytes */
-                    // TODO set body end to true if all the data (not just header but body) was parsed
-                    // successfully
-// Since the body would have been parsed already by the crate                   if dec_state.body_end {
+
+                        depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
+        if let Some((cur_tx, files, xxx)) = self.get_tx_with_files() {
+            if let Some(mime_dec) = cur_tx.mime_decoder.as_ref() {
+                if mime_dec.headers.is_some() {
+                    if mime_dec.parsable_body {
+                        // TODO print file content
+                        /* Set storage flag if applicable since only the first file in the
+                         * flow seems to be processed by the 'filestore' detector */
+                        //                    if (files.head.is_some() && (files.head.flags & FILE_STORE)) {
+                        //                        flags |= FILE_STORE; // TODO add this macro
+                        //                    }
+                        // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth)
+                        unsafe {
+                            files.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(), &0 /* track ID TODO*/, &chunk, *flags);
+                        }
+                        // TODO SMTPNewFile
+                        /* If close in the same chunk, then pass in empty bytes */
+                        // TODO set body end to true if all the data (not just header but body) was parsed
+                        // successfully
+                        // Since the body would have been parsed already by the crate                   if dec_state.body_end {
                         files.file_close(&0 /* track ID TODO */, *flags);
                         depth = self.ts_data_cnt - self.ts_last_data_stamp;
                         // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
                         // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-//                    }
+                        //                    }
+                    }
+                } else if mime::parse(&chunk) > 0 {
+                    files.file_close(&0 /* track ID TODO */, *flags);
+                    // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
+                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                } else {
+                    /* Append data chunk to file */
+                    files.file_append(&0 /* track ID TODO */, chunk, false /* is_gap TODO */);
+                    //                if files.tail && files.tail.content_inspected == 0 && files.tail.size >= smtp_config.content_inspect_min_size {
+                    //                    depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
+                    //                    // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
+                    //                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                    //                    /* after the start of the body inspection, disable the depth logic */
+                    //                } else if files.tail && files.tail.content_inspected > 0 {
+                    //                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                    //                /* expand the limit as long as we get file data, as the file data is bigger on the
+                    //                 * wire due to base64 */
+                    //                } else {
+                    //                    depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
+                    //                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
+                    //                }
                 }
-            } else if mime::parse(&chunk) > 0 {
-                files.file_close(&0 /* track ID TODO */, *flags);
-                depth = self.ts_data_cnt - self.ts_last_data_stamp;
-                // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
-                // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-            } else {
-                /* Append data chunk to file */
-                files.file_append(&0 /* track ID TODO */, chunk, false /* is_gap TODO */);
-//                if files.tail && files.tail.content_inspected == 0 && files.tail.size >= smtp_config.content_inspect_min_size {
-//                    depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
-//                    // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
-//                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-//                    /* after the start of the body inspection, disable the depth logic */
-//                } else if files.tail && files.tail.content_inspected > 0 {
-//                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-//                /* expand the limit as long as we get file data, as the file data is bigger on the
-//                 * wire due to base64 */
-//                } else {
-//                    depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
-//                    // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-//                }
             }
-        } else {
-            // print body is not a ctnt_attachment
         }
+    //} else {
+            // print body is not a ctnt_attachment
+        //}
         return 0;
     }
 
@@ -771,38 +776,50 @@ impl SMTPState {
             /* looks like are still waiting for a confirmation from the server */
             return 0;
         }
+        let single_dot = self.current_line.len() == 1 && char::from(self.current_line[0]) == '.';
         let cur_tx = self.get_cur_tx().unwrap();
         let mime_dec = cur_tx.mime_decoder.as_ref().unwrap();
-        if self.current_line.len() == 1 && char::from(self.current_line[0]) == '.' {
+        let have_mime_headers = mime_dec.headers.is_some();
+        let mut hack_dont_know_what_this_does = false;
+
+        let line = self.current_line.clone();
+        self.current_line = Vec::new();
+
+        if let Some((cur_tx, files, xxx)) = self.get_tx_with_files() {
+            if let Some(mime_dec) = cur_tx.mime_decoder.as_ref() {
+                if single_dot {
+                    hack_dont_know_what_this_does = true;
+                    if smtp_config.raw_extraction > 0 {
+                        /* we use this as the signal that message data is complete. */
+                        files.file_close(&0 /* TODO track ID */, 0);
+                    } else if smtp_config.decode_mime > 0 && mime_dec.headers.is_some() { // TODO global smtp_config + mime_State
+                        // Complete parsing task
+                        let ret  = mime::parse(&self.current_line);  // TODO is_parsable won't work here since a line is being passed here
+                        if ret as u8 != MIME_DEC_OK {
+                            self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
+                        }
+                        // Generate decoder events
+                        self.set_mime_events();
+                    }
+                    self.set_tx_complete();
+                } else if smtp_config.raw_extraction > 0 {
+                    // message not over, store the line. This is a substitution of ProcessDataChunk
+                    files.file_append(&0 /* track ID TODO */, &line, false /* is gap TODO */);
+                }
+            }
+        }
+        if hack_dont_know_what_this_does {
             self.parser_state &= !SMTP_PARSER_STATE_COMMAND_DATA_MODE;
             /* kinda like a hack.  The mail sent in DATA mode, would be
-            * acknowledged with a reply.  We insert a dummy command to
-            * the command buffer to be used by the reply handler to match
-            * the reply received */
+             * acknowledged with a reply.  We insert a dummy command to
+             * the command buffer to be used by the reply handler to match
+             * the reply received */
             self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE);
-            if smtp_config.raw_extraction > 0 {
-                /* we use this as the signal that message data is complete. */
-                self.files_ts.unwrap().file_close(&0 /* TODO track ID */, 0);
-            } else if smtp_config.decode_mime > 0 && mime_dec.headers.is_some() { // TODO global smtp_config + mime_State
-                // Complete parsing task
-                let ret  = mime::parse(&self.current_line);  // TODO is_parsable won't work here since a line is being passed here
-                if ret as u8 != MIME_DEC_OK {
-                    self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
-                }
-                // Generate decoder events
-                self.set_mime_events();
-            }
-            self.set_tx_complete();
-        } else if smtp_config.raw_extraction > 0 {
-            // message not over, store the line. This is a substitution of ProcessDataChunk
-            if let Some(ref mut files_ts) = self.files_ts {
-                self.files_ts.unwrap().file_append(&0 /* track ID TODO */, &self.current_line, false /* is gap TODO */);
-            }
         }
         // If DATA, parse out a MIME message
         if self.current_cmd == SMTP_COMMAND_DATA &&
             (self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE != 0) {
-            if smtp_config.decode_mime > 0 && self.get_cur_tx().unwrap().mime_decoder.unwrap().headers.is_some() { // TODO mime_state
+            if smtp_config.decode_mime > 0 && have_mime_headers { // TODO mime_state
                 if mime::parse(&self.current_line) > 0 {
                     // Generate decoder events
                     self.set_mime_events();
