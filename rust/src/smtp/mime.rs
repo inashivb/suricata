@@ -20,7 +20,7 @@ use mailparse::headers::Headers;
 //    pub parsable_headers: bool,
 //    pub parsable_body: bool,
 //    pub ctnt_attachment: bool,
-//    pub headers: Option<Headers<'a>>,
+//    pub headers_exist: bool,
 //}
 //
 //impl<'a> MimeDecode<'a> {
@@ -29,34 +29,35 @@ use mailparse::headers::Headers;
 //            parsable_headers: false,
 //            parsable_body: false,
 //            ctnt_attachment: false,
-//            headers: None,
+//            headers: false,
 //        }
 //    }
 //}
-//
-//
-//pub fn parse(data: &[u8]) -> i8 {
-//    let mut mime_dec = MimeDecode::new();
-//    match parse_mail(&data) {
-//        Ok(val) => {
-//            mime_dec.parsable_headers = true;
-//            mime_dec.parsable_body = true;
-//            mime_dec.headers = Some(val.get_headers());
-//            mime_dec.ctnt_attachment = if val.headers.get_all_values("Content-Disposition").len() > 0 { true } else { false };
-//        }
-//        _ => {
-//            return -1;
-//        }
-//    }
-//    1
-//}
+
+
+pub fn parse(data: &[u8]) -> Option<MimeDecode> {
+    let mut mime_dec = MimeDecode::new();
+    match parse_mail(&data) {
+        Ok(val) => {
+            mime_dec.parsable_headers = true;
+            mime_dec.parsable_body = true;
+            mime_dec.headers = if val.headers.len() > 0 { true } else { false };
+            mime_dec.ctnt_attachment = if val.headers.get_all_values("Content-Disposition").len() > 0 { true } else { false };
+            return Some(mime_dec);
+        }
+        Err(e) => {
+            println!(">>>ERROR<<< {:?}", e);
+            return None;
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MimeDecode {
     pub parsable_headers: bool,
     pub parsable_body: bool,
     pub ctnt_attachment: bool,
-    pub headers: Option<Vec<u8>>,
+    pub headers: bool,
 }
 
 
@@ -66,13 +67,9 @@ impl MimeDecode {
             parsable_headers: false,
             parsable_body: false,
             ctnt_attachment: false,
-            headers: None,
+            headers: false,
         }
     }
-}
-
-pub fn parse(data: &[u8]) -> i8 {
-    1
 }
 
 #[cfg(test)]

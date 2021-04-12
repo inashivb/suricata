@@ -90,8 +90,12 @@ pub const ANOM_MALFORMED_MSG: u16 = 64;  /* Misc msg format errors found */
 pub const ANOM_LONG_BOUNDARY: u16 = 128;  /* Boundary too long */
 pub const ANOM_LONG_FILENAME: u16 = 256;  /* filename truncated */
 
+// TODO take these out cleanly in core.rs
+pub const FILE_STORE: u16      = 0b01010;
+pub const FILE_NOMD5: u16      = 0b00010;
+pub const FILE_NOMAGIC: u16    = 0b00000;
+pub const FILE_USE_DETECT: u16 = 0b01101;
 
-pub const FILE_STORE: u16 = 0b01010;
 
 pub static mut SURICATA_SMTP_FILE_CONFIG: Option<&'static SuricataFileContext> = None;
 
@@ -100,6 +104,19 @@ pub extern "C" fn rs_smtp_init(context: &'static mut SuricataFileContext) {
     unsafe {
         SURICATA_SMTP_FILE_CONFIG = Some(context);
     }
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum SmtpCommand {
+    Helo,
+    StartTls,
+    MailFrom,
+    RcptTo,
+    Rset,
+    Bdat,
+    Data,
+    DataMode,
+    Unknown,
 }
 
 enum DecoderEvent {
@@ -263,7 +280,7 @@ pub fn smtp_reply(t: u8) -> String {
 //            tx_data: AppLayerTxData::new(),
 //        }
 //    }
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SMTPTransaction {
     tx_id: u64,
     pub request: Option<String>,
@@ -275,7 +292,7 @@ pub struct SMTPTransaction {
     rcpt_to: Vec<String>,
     de_state: Option<*mut core::DetectEngineState>,
     events: *mut core::AppLayerDecoderEvents,
-//    tx_data: AppLayerTxData, TODO doesn't have Clone impl, gives errors on fields, long chain
+    tx_data: AppLayerTxData, // TODO doesn't have Clone impl, gives errors on fields, long chain
 }
 
 impl SMTPTransaction {
@@ -291,7 +308,7 @@ impl SMTPTransaction {
             rcpt_to: Vec::new(),
             de_state: None,
             events: std::ptr::null_mut(),
-//            tx_data: AppLayerTxData::new(),
+            tx_data: AppLayerTxData::new(),
         }
     }
 
@@ -395,10 +412,10 @@ pub struct SMTPState {
     ts_data_cnt: u64,
     ts_last_data_stamp: u64,
     parser_state: u8,
-    current_cmd: u8,
+    current_cmd: SmtpCommand,
     bdat_chunk_len: u32,
     bdat_chunk_idx: u32,
-    cmds: Vec<u8>,
+    cmds: Vec<SmtpCommand>,
     cmds_buf_len: u16,
     cmds_idx: u16,
     helo: Vec<u8>,
@@ -414,7 +431,7 @@ impl SMTPState {
             transactions: Vec::new(),
             request_gap: false,
             response_gap: false,
-            direction: 0,
+            direction: core::STREAM_TOSERVER,
             current_line: Vec::new(),
             current_line_delim_len: 0,
             input: Vec::new(),
@@ -427,7 +444,7 @@ impl SMTPState {
             ts_data_cnt: 0,
             ts_last_data_stamp: 0,
             parser_state: 0,
-            current_cmd: 0,
+            current_cmd: SmtpCommand::Unknown,
             bdat_chunk_len: 0,
             bdat_chunk_idx: 0,
             cmds: Vec::new(),
@@ -457,23 +474,23 @@ impl SMTPState {
         }
     }
 
-//    pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction<'a>> {
     pub fn get_tx(&mut self, tx_id: u64) -> Option<&mut SMTPTransaction> {
         for tx in &mut self.transactions {
-            if tx.tx_id == tx_id + 1 {
+            println!("tx.tx_id: {:?}, tx_id: {:?}", tx.tx_id, tx_id);
+            if tx.tx_id == tx_id {
+                println!("returning some tx");
                 return Some(tx);
             }
         }
         return None;
     }
 
-//    pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction<'a>> {
     pub fn get_cur_tx(&mut self) -> Option<&mut SMTPTransaction> {
+        println!("self.tx_id: {:?}", self.tx_id);
         let tx_id = self.tx_id;
         self.get_tx(tx_id)
     }
 
-//    fn new_tx(&mut self) -> SMTPTransaction<'a> {
     fn new_tx(&mut self) -> SMTPTransaction {
         let mut tx = SMTPTransaction::new();
         self.tx_id += 1;
@@ -481,7 +498,6 @@ impl SMTPState {
         return tx;
     }
 
-//    fn find_request(&mut self) -> Option<&mut SMTPTransaction<'a>> {
     fn find_request(&mut self) -> Option<&mut SMTPTransaction> {
         for tx in &mut self.transactions {
             if tx.response.is_none() {
@@ -506,7 +522,7 @@ impl SMTPState {
     fn set_mime_events(&mut self) {
         let tx = self.get_cur_tx().unwrap();
         let mime_dec = tx.mime_decoder.as_ref().unwrap();
-        if mime_dec.headers.is_none() {
+        if !mime_dec.headers {
             return;
         }
         // Generate decoder events
@@ -544,118 +560,123 @@ impl SMTPState {
         }
     }
 
-//    fn get_line(&mut self, input: &[u8]) -> i8 {
-//        match self.direction {
-//            core::STREAM_TOSERVER => {
-//                if self.ts_current_line_lf_seen == 1 {
-//                    // We have seen the LF for previous line. Clear the parser details 
-//                    // to parse new line
-//                    self.ts_current_line_lf_seen = 0;
-//                    if self.ts_current_line_db == 1 {
-//                        self.ts_current_line_db = 0;
-//                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
-//                    }
-//                }
-//                let lf_idx = input.iter().position(|&x| x == 0x0a);
-//                match lf_idx {
-//                    Some(idx) => {
-//                        self.ts_current_line_lf_seen = 1;
-//                        if self.ts_current_line_db == 1 {
-//                            self.ts_db.append(input);
-//                            let ts_len = self.ts_db.len();
-//                            if ts_len > 1 && self.ts_db[ts_len - 2] == 0x0D {
-//                                self.current_line_delim_len = 2;
-//                            } else {
-//                                self.current_line_delim_len = 1;
-//                            }
-//                            self.current_line = self.ts_db.clone();
-//                        } else {
-//                            self.current_line = self.input;
-//                            // TODO check current_line_len stuff
-//                            if self.input != idx && idx - 1 == 0x0D {
-//                                self.current_line_delim_len = 2;
-//                            } else {
-//                                self.current_line_delim_len = 1;
-//                            }
-//                            self.input = self.input[idx + 1];
-//                        }
-//                    },
-//                    None => {
-//                        /* fragmented lines.  Decoder event for special cases.  Not all
-//                         * fragmented lines should be treated as a possible evasion
-//                         * attempt.  With multi payload smtp chunks we can have valid
-//                         * cases of fragmentation.  But within the same segment chunk
-//                         * if we see fragmentation then it's definitely something you
-//                         * should alert about */
-//                        if self.ts_current_line_db == 0 {
-//                            self.ts_current_line_db = 1;
-//                            self.ts_db.append(input);   
-//                        } else {
-//                            self.ts_db.append(input);
-//                        }
-//                        // input should probably be zero
-//                        return -1;
-//                    }
-//                }
-//
-//            },
-//            _ => {
-//                if self.tc_current_line_lf_seen == 1 {
-//                    // We have seen the LF for previous line. Clear the parser details 
-//                    // to parse new line
-//                    self.tc_current_line_lf_seen = 0;
-//                    if self.tc_current_line_db == 1 {
-//                        self.tc_current_line_db = 0;
-//                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
-//                    }
-//                }
-//                let lf_idx = input.iter().position(|&x| x == 0x0a);
-//                match lf_idx {
-//                    Some(idx) => {
-//                        self.tc_current_line_lf_seen = 1;
-//                        if self.tc_current_line_db == 1 {
-//                            // TODO realloc stuff see if affectc in rust
-//                            self.tc_db.append(input);
-//                            let tc_len = self.tc_db.len();
-//                            if tc_len > 1 && self.tc_db[tc_len - 2] == 0x0D {
-//                                self.current_line_delim_len = 2;
-//                            } else {
-//                                self.current_line_delim_len = 1;
-//                            }
-//                            self.current_line = self.tc_db.clone();
-//                        } else {
-//                            self.current_line = self.input;
-//                            // TODO check current_line_len stuff
-//                            if self.input != idx && idx - 1 == 0x0D {
-//                                self.current_line_delim_len = 2;
-//                            } else {
-//                                self.current_line_delim_len = 1;
-//                            }
-//                            self.input = self.input[idx + 1];
-//                        }
-//                    },
-//                    None => {
-//                        /* fragmented lines.  Decoder event for special cases.  Not all
-//                         * fragmented lines should be treated as a possible evasion
-//                         * attempt.  With multi payload smtp chunks we can have valid
-//                         * cases of fragmentation.  But within the same segment chunk
-//                         * if we see fragmentation then it's definitely something you
-//                         * should alert about */
-//                        if self.tc_current_line_db == 0 {
-//                            self.tc_current_line_db = 1;
-//                            self.tc_db.append(input);
-//                        } else {
-//                            self.tc_db.append(input);
-//                        }
-//                        // input should probably be zero
-//                        return -1;
-//                    }
-//                }
-//            },
-//        }
-//    }
-//
-    fn process_cmd_starttls() -> i8 {
+    fn get_line(&mut self) -> i32 {
+        match self.direction {
+            core::STREAM_TOSERVER => {
+                if self.ts_current_line_lf_seen == 1 {
+                    // We have seen the LF for previous line. Clear the parser details 
+                    // to parse new line
+                    self.ts_current_line_lf_seen = 0;
+                    if self.ts_current_line_db == 1 {
+                        self.ts_current_line_db = 0;
+                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
+                    }
+                }
+                let lf_idx = self.input.iter().position(|&x| x == 0x0a);
+                println!("lf_idx: {:?}", lf_idx);
+                match lf_idx {
+                    Some(idx) => {
+                        self.ts_current_line_lf_seen = 1;
+                        if self.ts_current_line_db == 1 {
+                            self.ts_db.append(&mut self.input.to_vec());
+                            let ts_len = self.ts_db.len();
+                            if ts_len > 1 && self.ts_db[ts_len - 2] == 0x0D {
+                                self.current_line_delim_len = 2;
+                            } else {
+                                self.current_line_delim_len = 1;
+                            }
+                            self.current_line = self.ts_db.clone();
+                        } else {
+                            self.current_line = self.input.clone();
+                            // TODO check current_line_len stuff
+                            if self.input[0] != idx as u8 && idx as u8 - 1 == 0x0D {
+                                self.current_line_delim_len = 2;
+                            } else {
+                                self.current_line_delim_len = 1;
+                            }
+                            self.input = self.input[idx + 1..].to_vec();
+                        }
+                        return idx as i32;
+                    },
+                    None => {
+                        /* fragmented lines.  Decoder event for special cases.  Not all
+                         * fragmented lines should be treated as a possible evasion
+                         * attempt.  With multi payload smtp chunks we can have valid
+                         * cases of fragmentation.  But within the same segment chunk
+                         * if we see fragmentation then it's definitely something you
+                         * should alert about */
+                        if self.ts_current_line_db == 0 {
+                            self.ts_current_line_db = 1;
+                            self.ts_db.append(&mut self.input.to_vec());
+                        } else {
+                            self.ts_db.append(&mut self.input.to_vec());
+                        }
+                        // input should probably be zero
+                        println!("fragmented line failure");
+                        return -1;
+                    }
+                }
+
+            },
+            _ => {
+                if self.tc_current_line_lf_seen == 1 {
+                    // We have seen the LF for previous line. Clear the parser details 
+                    // to parse new line
+                    self.tc_current_line_lf_seen = 0;
+                    if self.tc_current_line_db == 1 {
+                        self.tc_current_line_db = 0;
+                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
+                    }
+                }
+                let lf_idx = self.input.iter().position(|&x| x == 0x0a);
+                match lf_idx {
+                    Some(idx) => {
+                        self.tc_current_line_lf_seen = 1;
+                        if self.tc_current_line_db == 1 {
+                            // TODO realloc stuff see if affectc in rust
+                            self.tc_db.append(&mut self.input.to_vec());
+                            let tc_len = self.tc_db.len();
+                            if tc_len > 1 && self.tc_db[tc_len - 2] == 0x0D {
+                                self.current_line_delim_len = 2;
+                            } else {
+                                self.current_line_delim_len = 1;
+                            }
+                            self.current_line = self.tc_db.clone();
+                        } else {
+                            self.current_line = self.input.clone();
+                            // TODO check current_line_len stuff
+                            if self.input[0] != idx as u8 && idx as u8 - 1 == 0x0D {
+                                self.current_line_delim_len = 2;
+                            } else {
+                                self.current_line_delim_len = 1;
+                            }
+                            self.input = self.input[idx + 1..].to_vec();
+                        }
+                        return idx as i32;
+                    },
+                    None => {
+                        /* fragmented lines.  Decoder event for special cases.  Not all
+                         * fragmented lines should be treated as a possible evasion
+                         * attempt.  With multi payload smtp chunks we can have valid
+                         * cases of fragmentation.  But within the same segment chunk
+                         * if we see fragmentation then it's definitely something you
+                         * should alert about */
+                        if self.tc_current_line_db == 0 {
+                            self.tc_current_line_db = 1;
+                            self.tc_db.append(&mut self.input.to_vec());
+                        } else {
+                            self.tc_db.append(&mut self.input.to_vec());
+                        }
+                        // input should probably be zero
+                        println!("framented lines 656");
+                        return -1;
+                    }
+                }
+            },
+        }
+    }
+
+    fn process_cmd_starttls(&mut self) -> i8 {
         0
     }
 
@@ -692,10 +713,10 @@ impl SMTPState {
         // indicated both by the MIME content-type and the (usually OS-specific) filename extension
         //
 
-                        depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
+        depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
         if let Some((cur_tx, files, xxx)) = self.get_tx_with_files() {
             if let Some(mime_dec) = cur_tx.mime_decoder.as_ref() {
-                if mime_dec.headers.is_some() {
+                if mime_dec.headers {
                     if mime_dec.parsable_body {
                         // TODO print file content
                         /* Set storage flag if applicable since only the first file in the
@@ -718,11 +739,12 @@ impl SMTPState {
                         // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
                         //                    }
                     }
-                } else if mime::parse(&chunk) > 0 {
-                    files.file_close(&0 /* track ID TODO */, *flags);
+//                } else if mime::parse(&chunk) > 0 {   // TODO parse is incorrect here, add a flag to mark completion
+//                    files.file_close(&0 /* track ID TODO */, *flags);
                     // AppLayerParserTriggerRawStreamReassembly(flow, STREAM_TOSERVER);
                     // StreamTcpReassemblySetMinInspectDepth(flow->protoctx, STREAM_TOSERVER, depth);
-                } else {
+                }
+                  else {
                     /* Append data chunk to file */
                     files.file_append(&0 /* track ID TODO */, chunk, false /* is_gap TODO */);
                     //                if files.tail && files.tail.content_inspected == 0 && files.tail.size >= smtp_config.content_inspect_min_size {
@@ -747,7 +769,7 @@ impl SMTPState {
         return 0;
     }
 
-    fn insert_cmd_into_buf(&mut self, cmd: u8) -> i8 {
+    fn insert_cmd_into_buf(&mut self, cmd: SmtpCommand) -> i8 {
         if self.cmds.len() as u16 >= self.cmds_buf_len {
             let mut inc = SMTP_COMMAND_BUFFER_STEPS;
             if self.cmds_buf_len + SMTP_COMMAND_BUFFER_STEPS > u16::MAX {
@@ -755,7 +777,7 @@ impl SMTPState {
             }
             self.cmds_buf_len += inc;
         }
-        if self.cmds.len() >= 1 && (self.cmds.last() == Some(SMTP_COMMAND_STARTTLS).as_ref() || self.cmds.last() == Some(SMTP_COMMAND_DATA).as_ref()) {
+        if self.cmds.len() >= 1 && (self.cmds.last() == Some(SmtpCommand::StartTls).as_ref() || self.cmds.last() == Some(SmtpCommand::Data).as_ref()) {
             // decoder event
             self.set_event(DecoderEvent::SmtpDecoderEventInvalidPipelinedSequence);
             /* we have to have EHLO, DATA, VRFY, EXPN, TURN, QUIT, NOOP,
@@ -777,9 +799,6 @@ impl SMTPState {
             return 0;
         }
         let single_dot = self.current_line.len() == 1 && char::from(self.current_line[0]) == '.';
-        let cur_tx = self.get_cur_tx().unwrap();
-        let mime_dec = cur_tx.mime_decoder.as_ref().unwrap();
-        let have_mime_headers = mime_dec.headers.is_some();
         let mut hack_dont_know_what_this_does = false;
 
         let line = self.current_line.clone();
@@ -792,12 +811,12 @@ impl SMTPState {
                     if smtp_config.raw_extraction > 0 {
                         /* we use this as the signal that message data is complete. */
                         files.file_close(&0 /* TODO track ID */, 0);
-                    } else if smtp_config.decode_mime > 0 && mime_dec.headers.is_some() { // TODO global smtp_config + mime_State
+                    } else if smtp_config.decode_mime > 0 && mime_dec.headers { // TODO global smtp_config + mime_State
                         // Complete parsing task
-                        let ret  = mime::parse(&self.current_line);  // TODO is_parsable won't work here since a line is being passed here
-                        if ret as u8 != MIME_DEC_OK {
-                            self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
-                        }
+//                        let ret  = mime::parse(&self.current_line);  // TODO is_parsable won't work here since a line is being passed here
+//                        if ret as u8 != MIME_DEC_OK {
+//                            self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
+//                        }
                         // Generate decoder events
                         self.set_mime_events();
                     }
@@ -814,22 +833,24 @@ impl SMTPState {
              * acknowledged with a reply.  We insert a dummy command to
              * the command buffer to be used by the reply handler to match
              * the reply received */
-            self.insert_cmd_into_buf(SMTP_COMMAND_DATA_MODE);
+            self.insert_cmd_into_buf(SmtpCommand::DataMode);
         }
         // If DATA, parse out a MIME message
-        if self.current_cmd == SMTP_COMMAND_DATA &&
+        if self.current_cmd == SmtpCommand::Data &&
             (self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE != 0) {
-            if smtp_config.decode_mime > 0 && have_mime_headers { // TODO mime_state
-                if mime::parse(&self.current_line) > 0 {
-                    // Generate decoder events
-                    self.set_mime_events();
-                    self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
-                    /* keep the parser in its error state so we can log that,
-                    * the parser will reject new data */
-                } else {
-                        self.set_mime_events();
-                        self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
-                }
+            let cur_tx = self.get_cur_tx().unwrap();
+            let mime_dec = cur_tx.mime_decoder.as_ref().unwrap();
+            if smtp_config.decode_mime > 0 && mime_dec.headers { // TODO mime_state
+//                if mime::parse(&self.current_line) > 0 {
+//                    // Generate decoder events
+//                    self.set_mime_events();
+//                    self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
+//                    /* keep the parser in its error state so we can log that,
+//                    * the parser will reject new data */
+//                } else {
+//                        self.set_mime_events();
+//                        self.set_event(DecoderEvent::SmtpDecoderEventMimeParseFailed);
+//                }
             }
         }
         0
@@ -870,56 +891,64 @@ impl SMTPState {
         0
     }
 
-    fn parse_cmd_w_param(&mut self, pref: u8, mut target: &[u8]) -> i32 {
+    fn parse_cmd_w_param(&mut self, pref: u8, target: &mut Vec<u8>) {
+        println!("current_line: {:?}", self.current_line);
         let i = self.current_line[(pref + 1) as usize..].iter().position(|&x| char::from(x) != ' ').unwrap();
+        println!("i={:?}", i);
         /* rfc1870: with the size extension the mail from can be followed by an option.
         We use the space separator to detect it. */
-        let spc_i = self.current_line[i as usize..].iter().position(|&x| char::from(x) != ' ').unwrap();
-        target = &target[..spc_i - i + 1];
-        0
+        let spc_i = self.current_line[i as usize..].iter().position(|&x| char::from(x) == ' ').unwrap();
+        println!("spc_i={:?}", spc_i);
+        target.extend_from_slice(&self.current_line[..spc_i - i + 1]);
     }
 
     fn parse_cmd_helo(&mut self) -> i32 {
-        let helo = self.helo.clone();
+        let mut helo = self.helo.clone();
         if helo.len() > 0 {
             self.set_event(DecoderEvent::SmtpDecoderEventDuplicateFields);
+            // TODO this retval should be something other than 0
             return 0;
         }
-        self.parse_cmd_w_param(4, &helo)
-    }
-
-    fn parse_cmd_mail_from(&mut self) -> i32 {
-        let cur_tx = self.get_cur_tx().unwrap();
-        let mail_from = cur_tx.mail_from.clone();
-        if mail_from.len() > 0 {
-            self.set_event(DecoderEvent::SmtpDecoderEventDuplicateFields);
-            return 0;
-        }
-        self.parse_cmd_w_param(9, &mail_from)
-    }
-
-    fn parse_cmd_rcpt_to(&mut self) -> i32 {
-        let rcpt_to = Vec::new();
-        if self.parse_cmd_w_param(7, &rcpt_to) == 0 {
-            let s = match std::str::from_utf8(&rcpt_to) {
-                Ok(v) => v,
-                Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
-            };
-            let cur_tx = self.get_cur_tx().unwrap();
-            cur_tx.rcpt_to.push(s.to_string());
-        } else {
-            return -1;
-        }
+        self.parse_cmd_w_param(4, &mut helo);
+        self.helo = helo;
         0
     }
 
-    fn no_new_tx(&mut self) -> i8 {
+    fn parse_cmd_mail_from(&mut self) -> i32 {
+        let mut cur_tx = self.get_cur_tx().unwrap();
+        let mut mail_from = cur_tx.mail_from.clone();
+        if mail_from.len() > 0 {
+            self.set_event(DecoderEvent::SmtpDecoderEventDuplicateFields);
+            // TODO this retval should be something other than 0
+            return 0;
+        }
+        self.parse_cmd_w_param(9, &mut mail_from);
+        let mut cur_tx = self.get_cur_tx().unwrap();
+        cur_tx.mail_from = mail_from;
+        0
+    }
+
+    fn parse_cmd_rcpt_to(&mut self) -> i32 {
+        println!("txs: {:?}", self.transactions);
+        let mut rcpt_to = Vec::new();
+        self.parse_cmd_w_param(7, &mut rcpt_to);
+        let s = match std::str::from_utf8(&rcpt_to) {
+            Ok(v) => v,
+            Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+        };
+        let mut cur_tx = self.get_cur_tx().unwrap();
+        cur_tx.rcpt_to.push(s.to_string());
+        0
+    }
+
+    fn no_new_tx(&self) -> i8 {
         if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) > 0 {
             if self.current_line.len() >= 4 {
                 match std::str::from_utf8(&self.current_line) {
                     Ok("rset") | Ok("quit") => { return 1; },
                     _ => {
                         SCLogError!("SMTP current line could not be decoded");
+                        return -1;
                     }
                 }
             }
@@ -927,142 +956,207 @@ impl SMTPState {
         return 0;
     }
 
-//    fn process_request(&mut self) -> i8 {//, applayerparserstate?)
-//        let tx_id = self.tx_id;
-//        let cur_tx = self.get_tx(tx_id);
-//        match cur_tx {
-//            Some(tx) => {
-//                if tx.done == true && !self.no_new_tx() {
-//                    let new_tx = self.new_tx();
-//                }
-//                // TODO this seems like we'll be creating two transactions with the same tx_id, check this again
-//                self.transactions.push(new_tx);
-//                let ts_dcount = self.ts_data_cnt;
-//                self.ts_last_data_stamp = ts_dcount;
-//                // TODO StreamTcpReassemblySetMinInspectDepth stuff
-//            },
-//            None => {
-//                let new_tx = self.new_tx();
-//                // TODO this seems like we'll be creating two transactions with the same tx_id, check this again
-//                self.transactions.push(new_tx);
-//                let ts_dcount = self.ts_data_cnt;
-//                self.ts_last_data_stamp = ts_dcount;
-//                // TODO StreamTcpReassemblySetMinInspectDepth stuff
-//            },
-//        }
-//        let ts_dcount = self.current_line_len + self.current_line_delim_len;
-//        let cur_line_lc = self.current_line.to_lowercase();
-//        if !(self.parser_state & SMTP_PARSER_STATE_FIRST_REPLY_SEEN) {
-//            self.set_event(SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE);
-//        }
-//         /* there are 2 commands that can push it into this COMMAND_DATA mode - STARTTLS and DATA */
-//        if !(self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE) {
-//            // TODO design: maybe cur_line_lc switch would make more sense
-//            if self.current_line_len >= 8 && cur_line_lc.matches("starttls") {
-//                self.current_cmd = SMTP_COMMAND_STARTTLS;
-//            } else if self.current_line_len >=4 && cur_line_lc.matches("data") {
-//                self.current_cmd = SMTP_COMMAND_DATA;
-//                if smtp_config.raw_extraction {
-//                    let msgname = "rawmsg";
-//                    if self.files_ts == None {
-//                        self.files_ts = FileContainer::default();
-//                    }
-//                    if self.transactions.len() > 1 && !tx.done {
-//                        self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
-//                        self.files_ts.unwrap().file_close(0 /* Track ID TODO */, 0 /* flags TODO */);
-//                        let new_tx = self.new_tx();
-//                        self.transactions.push(new_tx);
-//                    }
-//                    if self.files_ts.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(), &0 /* track ID TODO*/, msgname, FILE_NOMD5|FILE_NOMAGIC|FILE_USE_DETECT) { // TODO these macros
-//                        self.new_file(); // TODO Implement this function
-//                    }
-//                } else if smtp_config.decode_mime {
-//                    // check if this transaction already has mime headers
-//                    // /* We have 2 chained mails and did not detect the end
-//                    // * of first one. So we start a new transaction.
-//                    if tx.mime_headers.len() > 0 {
-//                        // tx.mime_state.state_flag = PARSE_ERROR; // probably don't need it
-//                        // anymore
-//                        self.set_event(SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
-//                        let new_tx =self.new_tx();
-//                        self.transactions.push(new_tx);
-//                    }
-//                    (tx.mime_headers, _) = mime.parse_line(current_line).unwrap(); // TODO this is unsafe, what happens in case of an error?
-//                }
-//                /* Enter immediately data mode without waiting for server reply */
-//                if self.parser_state & SMTP_PARSER_STATE_PIPELINING_SERVER {
-//                    self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
-//                }
-//            } else if self.current_line_len >= 4 && cur_line_lc.matches("bdat") {
-//                self.parse_cmd_bdat();
-//                self.current_cmd = SMTP_COMMAND_BDAT;
-//                self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
-//            } else if self.current_line_len >= 4 && (cur_line_lc.matches("helo") || cur_line_lc.matches("ehlo")) {
-//                if self.parse_cmd_helo() == -1 {
-//                    return -1;
-//                }
-//                self.current_cmd = SMTP_COMMAND_OTHER_CMD;
-//            } else if self.current_line_len >= 9 && cur_line_lc.matches("mail from") {
-//                if self.parse_cmd_mail_from() == -1 {
-//                    return -1;
-//                }
-//                self.current_cmd = SMTP_COMMAND_OTHER_CMD;
-//            } else if self.current_line_len >= 7 && cur_line_lc.matches("rcpt to") {
-//                if self.parse_cmd_rcpt_to() == -1 {
-//                    return -1;
-//                }
-//                self.current_cmd = SMTP_COMMAND_OTHER_CMD;
-//            } else if self.current_line_len >= 4 && cur_line_lc.matches("rset") {
-//                // Resets chunk index in case of connection reuse
-//                self.bdat_chunk_idx = 0;
-//                self.current_cmd = SMTP_COMMAND_RSET;
-//            } else {
-//                self.current_cmd = SMTP_COMMAND_OTHER_CMD;
-//            }
-//            /* Every command is inserted into a command buffer, to be matched
-//            * against reply(ies) sent by the server */
-//            self.insert_cmd_into_buf(self.current_cmd);
-//            return 0;
-//        }
-//        match self.current_cmd {
-//            SMTP_COMMAND_STARTTLS => {
-//                self.process_cmd_starttls();
-//            },
-//            SMTP_COMMAND_DATA => {
-//                self.process_cmd_data();
-//            },
-//            SMTP_COMMAND_BDAT => {
-//                self.process_cmd_bdat();
-//            }
-//            _ => {
-//                /* we have nothing to do with any other command at this instant.
-//                * Just let it go through */
-//                return 0;
-//            }
-//        }
-//    }
-//
-//    fn parse_request(&mut self, input: &[u8]) -> AppLayerResult {
-//        // We're not interested in empty requests.
-//        if input.len() == 0 {
-//            return AppLayerResult::ok();
-//        }
-//
-//        // If there was gap, check we can sync up again.
-//        if self.request_gap {
-//            if probe(input).is_err() {
-//                // The parser now needs to decide what to do as we are not in sync.
-//                // For this smtp, we'll just try again next time.
-//                return AppLayerResult::ok();
-//            }
-//
-//            // It looks like we're in sync with a message header, clear gap
-//            // state and keep parsing.
-//            self.request_gap = false;
-//        }
-//
-//        let mut start = input;
-//        while start.len() > 0 {
+
+    fn process_tx_for_request(&mut self) -> &mut SMTPTransaction {
+        let no_new_tx = self.no_new_tx();
+        match self.get_cur_tx() {
+            Some(tx) => {
+                println!("tx was found");
+                if tx.done == true && no_new_tx == 0 {
+                    let mut new_tx = self.new_tx();
+                    self.transactions.push(new_tx);
+                }
+                let ts_dcount = self.ts_data_cnt;
+                self.ts_last_data_stamp = ts_dcount;
+                // TODO StreamTcpReassemblySetMinInspectDepth stuff
+                self.transactions.last_mut().unwrap()
+            },
+            None => {
+                println!("tx was not found");
+                let mut new_tx = self.new_tx();
+                self.transactions.push(new_tx);
+                let ts_dcount = self.ts_data_cnt;
+                self.ts_last_data_stamp = ts_dcount;
+                // TODO StreamTcpReassemblySetMinInspectDepth stuff
+                self.transactions.last_mut().unwrap()
+            },
+        }
+    }
+
+    fn set_current_cmd(&mut self, cur_line_lc: String) {
+        if is_cmd_match(cur_line_lc.clone(), "starttls") == true {
+            self.current_cmd = SmtpCommand::StartTls;
+        } else if is_cmd_match(cur_line_lc.clone(), "data") == true {
+            self.current_cmd = SmtpCommand::Data;
+        } else if is_cmd_match(cur_line_lc.clone(), "bdat") == true {
+            self.current_cmd = SmtpCommand::Bdat;
+        } else if is_cmd_match(cur_line_lc.clone(), "helo") == true {
+            self.current_cmd = SmtpCommand::Helo;
+        } else if is_cmd_match(cur_line_lc.clone(), "ehlo") == true {
+            self.current_cmd = SmtpCommand::Helo;
+        } else if is_cmd_match(cur_line_lc.clone(), "mail from") == true {
+            self.current_cmd = SmtpCommand::MailFrom;
+        } else if is_cmd_match(cur_line_lc.clone(), "rcpt to") == true {
+            self.current_cmd = SmtpCommand::RcptTo;
+        } else if is_cmd_match(cur_line_lc.clone(), "rset") == true {
+            self.current_cmd = SmtpCommand::Rset;
+        } else {
+            self.current_cmd = SmtpCommand::Unknown;
+        }
+    }
+
+    fn process_request(&mut self, input: &[u8], smtp_config: SMTPConfig) -> i8 {//, applayerparserstate?)
+        let current_line_len = self.current_line.len() as u8;
+        let current_line_delim_len = self.current_line_delim_len;
+        let parser_state = self.parser_state;
+        let current_line = self.current_line.clone();
+        let cur_tx = self.process_tx_for_request();
+        println!("cur tx: {:?}", cur_tx);
+        let cur_tx_done = cur_tx.done;
+        let ts_dcount = current_line_len + current_line_delim_len;
+        let cur_line_lc = match std::str::from_utf8(&current_line) {
+            Ok(v) => v.to_lowercase(),
+            Err(e) => panic!("Invalid UTF-8 sequence: {}", e),
+        };
+        if parser_state & SMTP_PARSER_STATE_FIRST_REPLY_SEEN == 0 {
+            self.set_event(DecoderEvent::SmtpDecoderEventNoServerWelcomeMessage);
+        }
+         /* there are 2 commands that can push it into this COMMAND_DATA mode - STARTTLS and DATA */
+        if parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE == 0 {
+            self.set_current_cmd(cur_line_lc);
+            let current_cmd = self.current_cmd;
+            match current_cmd {
+                SmtpCommand::StartTls => {
+                    if current_line_len >= 8 {
+                        self.process_cmd_starttls();
+                    }
+                },
+                SmtpCommand::Data => {
+                    if current_line_len >= 4 {
+                        if smtp_config.raw_extraction > 0 {
+                            let msgname = "rawmsg";
+                            if self.transactions.len() > 1 && cur_tx_done == false {
+                                self.set_event(DecoderEvent::SmtpDecoderEventUnparsableContent);
+                                self.files.files_ts.file_close(&0 /* Track ID TODO */, 0 /* flags TODO */);
+                                let new_tx = self.new_tx();
+                                self.transactions.push(new_tx);
+                            }
+                            unsafe {
+                                if self.files.files_ts.file_open(SURICATA_SMTP_FILE_CONFIG.unwrap(),
+                                                                 &0 /* track ID TODO*/,
+                                                                 msgname.as_bytes(),
+                                                                 FILE_NOMD5|FILE_NOMAGIC|FILE_USE_DETECT) >= 0 { // TODO check if 0 is acceptable
+                                    //self.new_file(); // TODO Implement this function
+                                }
+                            }
+                        } else if smtp_config.decode_mime > 0 {
+                            let mime_decoder = mime::parse(input);
+                            let cur_tx = self.transactions.last_mut().unwrap();
+                            cur_tx.mime_decoder = mime_decoder;
+
+                            let cur_tx_headers = cur_tx.mime_decoder.as_ref().unwrap().headers;
+                            // check if this transaction already has mime headers
+                            // /* We have 2 chained mails and did not detect the end
+                            // * of first one. So we start a new transaction.
+                            //
+                            // TODO probabl this needs to be done on the newly created tx, check again
+                            if cur_tx_headers == true {
+                                // tx.mime_state.state_flag = PARSE_ERROR; // probably don't need it
+                                // anymore
+                                self.set_event(DecoderEvent::SmtpDecoderEventUnparsableContent);
+                                let new_tx =self.new_tx();
+                                self.transactions.push(new_tx);
+                            }
+                            //cur_tx.mime_headers = mime.parse(current_line).unwrap(); // TODO this is unsafe, what happens in case of an error?
+                        }
+                        /* Enter immediately data mode without waiting for server reply */
+                        if self.parser_state & SMTP_PARSER_STATE_PIPELINING_SERVER != 0 {
+                            self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
+                        }
+                        self.process_cmd_data(smtp_config);
+                    }
+                },
+                SmtpCommand::Bdat => {
+                    if current_line_len >= 4 {
+                        self.parse_cmd_bdat();
+                        self.parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
+                    self.process_cmd_bdat();
+                    }
+                },
+                SmtpCommand::Helo => {
+                    if current_line_len >= 4 {
+                        if self.parse_cmd_helo() == -1 {
+                            println!("helo cmd failed");
+                            return -1;
+                        }
+                    }
+                },
+                SmtpCommand::MailFrom => {
+                    if current_line_len >= 9 {
+                        if self.parse_cmd_mail_from() == -1 {
+                            println!("mail_from cmd failed");
+                            return -1;
+                        }
+                    }
+                },
+                SmtpCommand::RcptTo => {
+                    if current_line_len >= 7 {
+                        if self.parse_cmd_rcpt_to() == -1 {
+                            println!("rcpt_to cmd failed");
+                            return -1;
+                        }
+                    }
+                },
+                SmtpCommand::Rset => {
+                    if current_line_len >= 4 {
+                        // Resets chunk index in case of connection reuse
+                        self.bdat_chunk_idx = 0;
+                    }
+                },
+                _ => {
+
+                },
+            }
+            /* Every command is inserted into a command buffer, to be matched
+            * against reply(ies) sent by the server */
+            self.insert_cmd_into_buf(self.current_cmd);
+            return 0;
+        }
+        0
+    }
+
+    fn parse_request(&mut self, input: &[u8], smtp_config: SMTPConfig) -> AppLayerResult {
+        // We're not interested in empty requests.
+        if input.len() == 0 {
+            return AppLayerResult::ok();
+        }
+
+        // If there was gap, check we can sync up again.
+        if self.request_gap {
+            if probe(input).is_err() {
+                // The parser now needs to decide what to do as we are not in sync.
+                // For this smtp, we'll just try again next time.
+                return AppLayerResult::ok();
+            }
+
+            // It looks like we're in sync with a message header, clear gap
+            // state and keep parsing.
+            self.request_gap = false;
+        }
+
+        self.input = input.to_vec();
+        let mut consumed = input.len() as i32;
+        while consumed > 0 {
+            let retval = self.get_line();
+            if retval < 0 {
+                consumed = 0;
+                println!("Getline failed");
+                //return AppLayerResult::err();
+            } else {
+                println!("mail can be saved now");
+                consumed -= retval;
+                // TODO save the entire mail somwehere to be passed to mailparse
+            }
 //            match parser::parse_message(start) {  // This is for header parsing etc
 //                Ok((rem, request)) => {
 //                    start = rem;
@@ -1084,13 +1178,12 @@ impl SMTPState {
 //                    return AppLayerResult::err();
 //                },
 //            }
-//        }
-//
-//        // Implement SMTPGetLine here somwhere
-//
-//        // Input was fully consumed.
-//        return AppLayerResult::ok();
-//    }
+        }
+        self.process_request(input, smtp_config);
+
+        // Input was fully consumed.
+        return AppLayerResult::ok();
+    }
 //
 //    fn parse_response(&mut self, input: &[u8]) -> AppLayerResult {
 //        // We're not interested in empty responses.
@@ -1159,6 +1252,10 @@ impl SMTPState {
 //    }
 }
 
+fn is_cmd_match(s: String, cmd: &str) -> bool {
+    s.matches(&cmd).collect::<Vec<&str>>().len() > 0
+}
+
 ////// TODO 3rd priority is retrieving config from suricata.yaml
 ////fn smtp_configure() {
 ////    let conf = ConfNode::get_child_value("app-layer.protocols.smtp.mime");
@@ -1200,18 +1297,9 @@ impl SMTPState {
 //
 ///// TODO Probe for a valid header.
 /////
-///// As this smtp protocol uses messages prefixed with the size
-///// as a string followed by a ':', we look at up to the first 10
-///// characters for that pattern.
-//fn probe(input: &[u8]) -> nom::IResult<&[u8], ()> {
-//    let size = std::cmp::min(10, input.len());
-//    let (rem, prefix) = nom::bytes::complete::take(size)(input)?;
-//    nom::sequence::terminated(
-//        nom::bytes::complete::take_while1(nom::character::is_digit),
-//        nom::bytes::complete::tag(":"),
-//    )(prefix)?;
-//    Ok((rem, ()))
-//}
+fn probe(input: &[u8]) -> nom::IResult<&[u8], ()> {
+    Ok((&[1, 0], ()))
+}
 
 // C exports.
 
@@ -1535,38 +1623,95 @@ impl SMTPState {
 //    }
 //}
 //
-//#[cfg(test)]
-//mod test {
-//    use super::*;
-//
-//    #[test]
-//    fn test_probe() {
-//        assert!(probe(b"1").is_err());
-//        assert!(probe(b"1:").is_ok());
-//        assert!(probe(b"123456789:").is_ok());
-//        assert!(probe(b"0123456789:").is_err());
-//    }
-//
-//    #[test]
-//    fn test_incomplete() {
-//        let mut state = SMTPState::new();
-//        let buf = b"5:Hello3:bye";
-//
-//        let r = state.parse_request(&buf[0..0]);
-//        assert_eq!(r, AppLayerResult{ status: 0, consumed: 0, needed: 0});
-//
-//        let r = state.parse_request(&buf[0..1]);
-//        assert_eq!(r, AppLayerResult{ status: 1, consumed: 0, needed: 2});
-//
-//        let r = state.parse_request(&buf[0..2]);
-//        assert_eq!(r, AppLayerResult{ status: 1, consumed: 0, needed: 3});
-//
-//        // This is the first message and only the first message.
-//        let r = state.parse_request(&buf[0..7]);
-//        assert_eq!(r, AppLayerResult{ status: 0, consumed: 0, needed: 0});
-//
-//        // The first message and a portion of the second.
-//        let r = state.parse_request(&buf[0..9]);
-//        assert_eq!(r, AppLayerResult{ status: 1, consumed: 7, needed: 3});
-//    }
-//}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_smtp_request_parsing() {
+        let request: &[u8] = &[
+        0x45, 0x48, 0x4c, 0x4f, 0x20, 0x5b, 0x31, 0x39,
+        0x32, 0x2e, 0x31, 0x36, 0x38, 0x2e, 0x30, 0x2e,
+        0x31, 0x35, 0x38, 0x5d, 0x0d, 0x0a
+        ];
+
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+
+    #[test]
+    fn test_cmd_ehlo() {
+        /* EHLO boo.com<CR><LF> */
+        let request: &[u8] = &[
+            0x45, 0x48, 0x4c, 0x4f, 0x20, 0x62, 0x6f, 0x6f,
+            0x2e, 0x63, 0x6f, 0x6d, 0x0d, 0x0a
+        ];
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+
+    #[test]
+    fn test_cmd_rcpt_to() {
+        /* RCPT TO:bimbs@gmail.com<CR><LF> */
+        let request: &[u8] = &[
+            0x52, 0x43, 0x50, 0x54, 0x20, 0x54, 0x4f, 0x3a,
+            0x62, 0x69, 0x6d, 0x62, 0x73, 0x40, 0x67, 0x6d,
+            0x61, 0x69, 0x6c, 0x2e, 0x63, 0x6f, 0x6d, 0x0d,
+            0x0a
+        ];
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+
+    #[test]
+    fn test_cmd_mail_from() {
+        /* MAIL FROM:asdff@asdf.com<CR><LF> */
+        let request: &[u8] = &[
+            0x4d, 0x41, 0x49, 0x4c, 0x20, 0x46, 0x52, 0x4f,
+            0x4d, 0x3a, 0x61, 0x73, 0x64, 0x66, 0x66, 0x40,
+            0x61, 0x73, 0x64, 0x66, 0x2e, 0x63, 0x6f, 0x6d,
+            0x0d, 0x0a
+        ];
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+
+    #[test]
+    fn test_cmd_bdat() {
+         /* BDAT 51<CR><LF> */
+        let request: &[u8] = &[
+            0x42, 0x44, 0x41, 0x54, 0x20, 0x35, 0x31, 0x0d,
+            0x0a,
+        ];
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+
+    #[test]
+    fn test_cmd_data() {
+        /* MAIL FROM:pbsf@asdfs.com<CR><LF>
+         * RCPT TO:pbsf@asdfs.com<CR><LF>
+         * DATA<CR><LF>
+         * Immediate data
+         */
+        let request: &[u8] = &[
+            0x4d, 0x41, 0x49, 0x4c, 0x20, 0x46, 0x52, 0x4f,
+            0x4d, 0x3a, 0x70, 0x62, 0x73, 0x66, 0x40, 0x61,
+            0x73, 0x64, 0x66, 0x73, 0x2e, 0x63, 0x6f, 0x6d,
+            0x0d, 0x0a, 0x52, 0x43, 0x50, 0x54, 0x20, 0x54,
+            0x4f, 0x3a, 0x70, 0x62, 0x73, 0x66, 0x40, 0x61,
+            0x73, 0x64, 0x66, 0x73, 0x2e, 0x63, 0x6f, 0x6d,
+            0x0d, 0x0a, 0x44, 0x41, 0x54, 0x41, 0x0d, 0x0a,
+            0x49, 0x6d, 0x6d, 0x65, 0x64, 0x69, 0x61, 0x74,
+            0x65, 0x20, 0x64, 0x61, 0x74, 0x61, 0x0d, 0x0a,
+        ];
+        let smtp_config = SMTPConfig::new();
+        let mut smtp_state = SMTPState::new();
+        assert_eq!(AppLayerResult::ok(), smtp_state.parse_request(request, smtp_config));
+    }
+}
