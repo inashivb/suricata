@@ -4,37 +4,6 @@ use mailparse::*;
 use mailparse::headers::Headers;
 
 
-//impl std::fmt::Debug for MimeDecode<'_> {
-//    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//        f.debug_struct("MimeDecode")
-//            .field("parsable_headers", &self.parsable_headers)
-//            .field("parsable_body", &self.parsable_body)
-//            .field("ctnt_attachment", &self.ctnt_attachment)
-//            .field("headers", &self.headers)
-//            .finish()
-//    }
-//}
-//
-//#[derive(Debug, Clone)]
-//pub struct MimeDecode<'a> {
-//    pub parsable_headers: bool,
-//    pub parsable_body: bool,
-//    pub ctnt_attachment: bool,
-//    pub headers_exist: bool,
-//}
-//
-//impl<'a> MimeDecode<'a> {
-//    pub fn new() -> MimeDecode<'a> {
-//        MimeDecode {
-//            parsable_headers: false,
-//            parsable_body: false,
-//            ctnt_attachment: false,
-//            headers: false,
-//        }
-//    }
-//}
-
-
 pub fn parse(data: &[u8]) -> Option<MimeDecode> {
     let mut mime_dec = MimeDecode::new();
     match parse_mail(&data) {

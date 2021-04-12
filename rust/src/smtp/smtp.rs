@@ -51,20 +51,6 @@ pub const SMTP_PARSER_STATE_PARSING_SERVER_RESPONSE: u8 = 0x02;
 pub const SMTP_PARSER_STATE_FIRST_REPLY_SEEN: u8 = 0x04;
 pub const SMTP_PARSER_STATE_PARSING_MULTILINE_REPLY: u8 = 0x08;
 pub const SMTP_PARSER_STATE_PIPELINING_SERVER: u8 = 0x10;
-/* Various SMTP commands
- * We currently have var-ified just STARTTLS and DATA, since we need to them
- * for state transitions.  The rest are just indicate as OTHER_CMD.  Other
- * commands would be introduced as and when needed */
-pub const SMTP_COMMAND_STARTTLS: u8 = 1;
-pub const SMTP_COMMAND_DATA: u8 = 2;
-pub const SMTP_COMMAND_BDAT: u8 = 3;
-/* not an actual command per se, but the mode where we accept the mail after
- * DATA has it's own reply code for completion, from the server.  We give this
- * stage a pseudo command of it's own, so that we can add this to the command
- * buffer to match with the reply */
-pub const SMTP_COMMAND_DATA_MODE: u8 = 4;
-pub const SMTP_COMMAND_OTHER_CMD: u8 = 5;
-pub const SMTP_COMMAND_RSET: u8 = 6;
 /* Different EHLO extensions.  Not used now. */
 pub const SMTP_EHLO_EXTENSION_PIPELINING: u8 = 7;
 pub const SMTP_EHLO_EXTENSION_SIZE: u8 = 8;
@@ -106,6 +92,11 @@ pub extern "C" fn rs_smtp_init(context: &'static mut SuricataFileContext) {
     }
 }
 
+/* Various SMTP commands
+ * We currently have var-ified just STARTTLS and DATA, since we need to them
+ * for state transitions.  The rest are just indicate as OTHER_CMD.  Other
+ * commands would be introduced as and when needed
+ * */
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum SmtpCommand {
     Helo,
@@ -115,6 +106,10 @@ enum SmtpCommand {
     Rset,
     Bdat,
     Data,
+    /* not an actual command per se, but the mode where we accept the mail after
+     * DATA has it's own reply code for completion, from the server.  We give this
+     * stage a pseudo command of it's own, so that we can add this to the command
+     * buffer to match with the reply */
     DataMode,
     Unknown,
 }
@@ -249,37 +244,6 @@ pub fn smtp_reply(t: u8) -> String {
     }.to_string()
 }
 
-//#[derive(Debug)]
-//pub struct SMTPTransaction<'a> {
-//    tx_id: u64,
-//    pub request: Option<String>,
-//    pub response: Option<String>,
-//    pub mime_decoder: Option<MimeDecode<'a>>,
-//    pub anomaly_flags: u16,
-//    done: bool,
-//    mail_from: Vec<u8>,
-//    rcpt_to: Vec<String>,
-//    de_state: Option<*mut core::DetectEngineState>,
-//    events: *mut core::AppLayerDecoderEvents,
-//    tx_data: AppLayerTxData,
-//}
-//
-//impl<'a> SMTPTransaction<'a> {
-//    pub fn new() -> SMTPTransaction<'static> {
-//        SMTPTransaction {
-//            tx_id: 0,
-//            request: None,
-//            response: None,
-//            mime_decoder: None,
-//            anomaly_flags: 0,
-//            done: false,
-//            mail_from: Vec::new(),
-//            rcpt_to: Vec::new(),
-//            de_state: None,
-//            events: std::ptr::null_mut(),
-//            tx_data: AppLayerTxData::new(),
-//        }
-//    }
 #[derive(Debug)]
 pub struct SMTPTransaction {
     tx_id: u64,
@@ -292,7 +256,7 @@ pub struct SMTPTransaction {
     rcpt_to: Vec<String>,
     de_state: Option<*mut core::DetectEngineState>,
     events: *mut core::AppLayerDecoderEvents,
-    tx_data: AppLayerTxData, // TODO doesn't have Clone impl, gives errors on fields, long chain
+    tx_data: AppLayerTxData,
 }
 
 impl SMTPTransaction {
@@ -342,16 +306,7 @@ impl SMTPTransaction {
                                               smtp_config.content_inspect_min_size);
     }
 
-//    pub fn is_ctnt_attachment(&self) {
-//        mime.is_ctnt_attachment(&self.mime_headers)
-//    }
 }
-
-//impl<'a> Drop for SMTPTransaction<'a> {
-//    fn drop(&mut self) {
-//        self.free();
-//    }
-//}
 
 impl Drop for SMTPTransaction {
     fn drop(&mut self) {
@@ -391,11 +346,9 @@ impl SMTPConfig {
     }
 }
 
-//pub struct SMTPState<'a> {
 #[derive(Debug)]
 pub struct SMTPState {
     tx_id: u64,
-//    transactions: Vec<SMTPTransaction<'a>>,
     transactions: Vec<SMTPTransaction>,
     request_gap: bool,
     response_gap: bool,
@@ -423,7 +376,6 @@ pub struct SMTPState {
     file_track_id: u32,
 }
 
-//impl<'a> SMTPState<'a> {
 impl SMTPState {
     pub fn new() -> Self {
         Self {
@@ -569,7 +521,7 @@ impl SMTPState {
                     self.ts_current_line_lf_seen = 0;
                     if self.ts_current_line_db == 1 {
                         self.ts_current_line_db = 0;
-                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
+                        self.current_line = Vec::new();
                     }
                 }
                 let lf_idx = self.input.iter().position(|&x| x == 0x0a);
@@ -588,7 +540,6 @@ impl SMTPState {
                             self.current_line = self.ts_db.clone();
                         } else {
                             self.current_line = self.input.clone();
-                            // TODO check current_line_len stuff
                             if self.input[0] != idx as u8 && idx as u8 - 1 == 0x0D {
                                 self.current_line_delim_len = 2;
                             } else {
@@ -625,7 +576,7 @@ impl SMTPState {
                     self.tc_current_line_lf_seen = 0;
                     if self.tc_current_line_db == 1 {
                         self.tc_current_line_db = 0;
-                        self.current_line = Vec::new(); // TODO is this the right way to free a vector?
+                        self.current_line = Vec::new();
                     }
                 }
                 let lf_idx = self.input.iter().position(|&x| x == 0x0a);
@@ -633,7 +584,6 @@ impl SMTPState {
                     Some(idx) => {
                         self.tc_current_line_lf_seen = 1;
                         if self.tc_current_line_db == 1 {
-                            // TODO realloc stuff see if affectc in rust
                             self.tc_db.append(&mut self.input.to_vec());
                             let tc_len = self.tc_db.len();
                             if tc_len > 1 && self.tc_db[tc_len - 2] == 0x0D {
@@ -644,7 +594,6 @@ impl SMTPState {
                             self.current_line = self.tc_db.clone();
                         } else {
                             self.current_line = self.input.clone();
-                            // TODO check current_line_len stuff
                             if self.input[0] != idx as u8 && idx as u8 - 1 == 0x0D {
                                 self.current_line_delim_len = 2;
                             } else {
@@ -683,7 +632,6 @@ impl SMTPState {
     pub fn get_tx_with_files(&mut self)
         -> Option<(&mut SMTPTransaction, &mut FileContainer, u16)>
     {
-        //let tx = self.get_cur_tx().unwrap();
         let tx_ref = self.transactions.last_mut();
         let (files, flags) = self.files.get(STREAM_TOSERVER);
         return Some((tx_ref.unwrap(), files, flags));
@@ -840,7 +788,7 @@ impl SMTPState {
             (self.parser_state & SMTP_PARSER_STATE_COMMAND_DATA_MODE != 0) {
             let cur_tx = self.get_cur_tx().unwrap();
             let mime_dec = cur_tx.mime_decoder.as_ref().unwrap();
-            if smtp_config.decode_mime > 0 && mime_dec.headers { // TODO mime_state
+            if smtp_config.decode_mime > 0 && mime_dec.headers {
 //                if mime::parse(&self.current_line) > 0 {
 //                    // Generate decoder events
 //                    self.set_mime_events();
@@ -1155,7 +1103,6 @@ impl SMTPState {
             } else {
                 println!("mail can be saved now");
                 consumed -= retval;
-                // TODO save the entire mail somwehere to be passed to mailparse
             }
 //            match parser::parse_message(start) {  // This is for header parsing etc
 //                Ok((rem, request)) => {
