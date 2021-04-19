@@ -34,7 +34,7 @@ pub static mut ALPROTO_SMTP: AppProto = ALPROTO_UNKNOWN;
 pub const FILEDATA_CONTENT_LIMIT: u32 = 100000;
 /* content-inspect-min-size default value */
 pub const FILEDATA_CONTENT_INSPECT_MIN_SIZE: u32 = 32768;
-pub const FILEDATA_CONTENT_INSPECT_WINDOW: u16 = 4096;
+pub const FILEDATA_CONTENT_INSPECT_WINDOW: u32 = 4096;
 pub const SMTP_RAW_EXTRACTION_DEFAULT_VALUE: u8 = 0;
 pub const SMTP_MAX_REQUEST_AND_REPLY_LINE_LENGTH: u16 = 510;
 pub const SMTP_COMMAND_BUFFER_STEPS: u16 = 5;
@@ -318,8 +318,21 @@ pub struct MimeDecConfig {
     decode_base64: i32,
     decode_quoted_printable: i32,
     extract_urls: i32,
-    bode_md5: i32,
+    body_md5: i32,
     header_value_depth: u32,
+}
+
+impl MimeDecConfig {
+    pub fn new() -> MimeDecConfig {
+        MimeDecConfig {
+            // TODO perhaps all these should be bool
+            decode_base64: 0,
+            decode_quoted_printable: 0,
+            extract_urls: 0,
+            body_md5: 0,
+            header_value_depth: 0,
+        }
+    }
 }
 
 pub struct SMTPConfig {
@@ -1203,44 +1216,53 @@ fn is_cmd_match(s: String, cmd: &str) -> bool {
     s.matches(&cmd).collect::<Vec<&str>>().len() > 0
 }
 
-////// TODO 3rd priority is retrieving config from suricata.yaml
-////fn smtp_configure() {
-////    let conf = ConfNode::get_child_value("app-layer.protocols.smtp.mime");
-////    match conf {
-////        Some(val) => {
-////            let bool_config_keys = vec!["decode-mime", "decode-base64", "decode-quoted-printable", "extract-urls", "body-md5"];
-////            for i in bool_config_keys.iter() {}
-////            // TODO maybe dict way like below won't work, will have to make a struct
-////                smtp_config[i] = ConfNode::get_child_bool(i); // TODO global smtp_config
-////            smtp_config["header-value-depth"] = ConfNode::get_child_bool("header-value-depth")
-////        },
-////        None => {}
-////    }
-////
-////    // TODO Pass mime config data to MimeDec API
-////    // MimeDecSetConfig(&smtp_config.mime_config);
-////    smtp_config.content_limit = FILEDATA_CONTENT_LIMIT;
-////    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
-////    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
-////
-////    // TODO child value maybe incorrect here, check again
-////    let conf = ConfNode::get_child_value("app-layer.protocols.smtp.inspected-tracker");
-////    match conf {
-////        Some(val) => {
-////            // TODO loop over the child keys and get values
-////            // leaving todo to confirm if child value fn does the right thing
-////        },
-////        None => {}
-////    }
-////    smtp_config.sbcfg.buf_size = content_limit ? content_limit : 256;
-////    if ConfNode::get_child_bool("app-layer.protocols.smtp.raw-extraction") != true {
-////        smtp_config.raw_extraction = SMTP_RAW_EXTRACTION_DEFAULT_VALUE;
-////    }
-////    if smtp_config.raw_extraction && smtp_config.decode_mime {
-////        smtp_config.raw_extraction = 0;
-////    }
-////    0
-////}
+fn smtp_configure(mut smtp_config: SMTPConfig) -> i8 {
+    let mut content_limit: u32 = 0;
+    let root = "app-layer.protocols.smtp.mime";
+    let conf = conf_get(root);
+    // TODO ask Victor about https://crates.io/crates/yaml-rust
+    match conf {
+        Some(node) => {
+            let mut mime_cfg = MimeDecConfig::new();
+            smtp_config.decode_mime = conf_get(&(root.to_owned() + "decode-mime")).unwrap().to_string().parse::<i32>().unwrap();
+            mime_cfg.decode_base64 = conf_get_bool(&(root.to_owned() + "decode-base64")).to_string().parse::<i32>().unwrap();
+            mime_cfg.decode_quoted_printable = conf_get_bool(&(root.to_owned() + "decode-quoted-printable")).to_string().parse::<i32>().unwrap();
+            mime_cfg.extract_urls = conf_get_bool(&(root.to_owned() + "extract-urls")).to_string().parse::<i32>().unwrap();
+            mime_cfg.body_md5 = conf_get_bool(&(root.to_owned() + "body-md5")).to_string().parse::<i32>().unwrap();
+            mime_cfg.header_value_depth = conf_get(&(root.to_owned() + "header-value-depth")).unwrap().to_string().parse::<u32>().unwrap(); // TODO Dangerous
+            smtp_config.mime_config = Some(mime_cfg);
+        },
+        None => {}
+    }
+
+    smtp_config.content_lim = FILEDATA_CONTENT_LIMIT;
+    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+
+    let root2 = "app-layer.protocols.smtp.inspected-tracker";
+    let conf = conf_get(root2);
+    match conf {
+        Some(node) => {
+            if let Some(content_lim) = conf_get(&(root.to_owned() + "content-limit")) {
+                content_limit = content_lim.to_string().parse::<u32>().unwrap(); // Shadowing
+            } else {
+                content_limit = FILEDATA_CONTENT_LIMIT;
+            }
+            smtp_config.content_lim = content_limit;
+            smtp_config.content_inspect_window =conf_get(&(root.to_owned() + "content-inspect-min-size")).unwrap_or(&FILEDATA_CONTENT_INSPECT_WINDOW.to_string()).to_string().parse::<u32>().unwrap(); // TODO Dangerous
+            smtp_config.content_inspect_min_size = conf_get(&(root.to_owned() + "content-inspect-window")).unwrap_or(&FILEDATA_CONTENT_INSPECT_MIN_SIZE.to_string()).to_string().parse::<u32>().unwrap(); // TODO Dangerous
+        },
+        None => {}
+    }
+//    smtp_config.sbcfg.buf_size = if content_limit > 0 { content_limit } else { 256 };
+    if conf_get("app-layer.protocols.smtp.raw-extraction").is_some() {
+        smtp_config.raw_extraction = SMTP_RAW_EXTRACTION_DEFAULT_VALUE as i32;
+    }
+    if (smtp_config.raw_extraction & smtp_config.decode_mime) != 0 {
+        smtp_config.raw_extraction = 0;
+    }
+    0
+}
 //
 ///// TODO Probe for a valid header.
 /////
