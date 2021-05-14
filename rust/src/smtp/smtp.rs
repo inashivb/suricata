@@ -653,26 +653,11 @@ impl SMTPState {
     pub fn process_data_chunk(&mut self, smtp_config: SMTPConfig, chunk: &[u8], len: u32, flags: &mut u16) -> i8 {
         let ret = MIME_DEC_OK;
         let mut depth = 0;
-        //let mut files: FileContainer;
 
         // TODO bring this out in the request method
         // let flags = unsafe { FileFlowToFlags(flow, STREAM_TOSERVER) };
         // we depend on detection engine for file pruning
         *flags |= FILE_USE_DETECT;
-
-        // Find file
-        // From Wikipedia: 
-        // Def 1: BEST WAY TO FIGURE OUT IF ITS AN ATTACHMENT
-        // In addition to the presentation style, the field Content-Disposition
-        // also provides parameters for specifying the name of the file, the creation date and 
-        // modification date, which can be used by the reader's mail user agent to store the 
-        // attachment.
-        // Def 2:
-        // text plus attachments (multipart/mixed with a text/plain part and other non-text 
-        // parts). A MIME message including an attached file generally indicates the file's 
-        // original name with the field "Content-Disposition", so that the type of file is 
-        // indicated both by the MIME content-type and the (usually OS-specific) filename extension
-        //
 
         depth = smtp_config.content_inspect_min_size as u64 + self.ts_data_cnt - self.ts_last_data_stamp;
         if let Some((cur_tx, files, xxx)) = self.get_tx_with_files() {
