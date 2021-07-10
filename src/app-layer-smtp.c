@@ -56,6 +56,7 @@
 #include "util-mem.h"
 #include "util-misc.h"
 #include "util-validate.h"
+#include "rust.h"
 
 /* content-limit default value */
 #define FILEDATA_CONTENT_LIMIT 100000
@@ -250,100 +251,101 @@ static SMTPString *SMTPStringAlloc(void);
 static void SMTPConfigure(void) {
 
     SCEnter();
-    int ret = 0, val;
-    intmax_t imval;
-    uint32_t content_limit = 0;
-    uint32_t content_inspect_min_size = 0;
-    uint32_t content_inspect_window = 0;
-
-    ConfNode *config = ConfGetNode("app-layer.protocols.smtp.mime");
-    if (config != NULL) {
-
-        ret = ConfGetChildValueBool(config, "decode-mime", &val);
-        if (ret) {
-            smtp_config.decode_mime = val;
-        }
-
-        ret = ConfGetChildValueBool(config, "decode-base64", &val);
-        if (ret) {
-            smtp_config.mime_config.decode_base64 = val;
-        }
-
-        ret = ConfGetChildValueBool(config, "decode-quoted-printable", &val);
-        if (ret) {
-            smtp_config.mime_config.decode_quoted_printable = val;
-        }
-
-        ret = ConfGetChildValueInt(config, "header-value-depth", &imval);
-        if (ret) {
-            smtp_config.mime_config.header_value_depth = (uint32_t) imval;
-        }
-
-        ret = ConfGetChildValueBool(config, "extract-urls", &val);
-        if (ret) {
-            smtp_config.mime_config.extract_urls = val;
-        }
-
-        ret = ConfGetChildValueBool(config, "body-md5", &val);
-        if (ret) {
-            smtp_config.mime_config.body_md5 = val;
-        }
-    }
-
-    /* Pass mime config data to MimeDec API */
-    MimeDecSetConfig(&smtp_config.mime_config);
-
-    smtp_config.content_limit = FILEDATA_CONTENT_LIMIT;
-    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
-    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
-
-    ConfNode *t = ConfGetNode("app-layer.protocols.smtp.inspected-tracker");
-    ConfNode *p = NULL;
-
-    if (t != NULL) {
-        TAILQ_FOREACH(p, &t->head, next) {
-            if (strcasecmp("content-limit", p->name) == 0) {
-                if (ParseSizeStringU32(p->val, &content_limit) < 0) {
-                    SCLogWarning(SC_ERR_SIZE_PARSE,
-                            "parsing content-limit %s failed", p->val);
-                    content_limit = FILEDATA_CONTENT_LIMIT;
-                }
-                smtp_config.content_limit = content_limit;
-            }
-
-            if (strcasecmp("content-inspect-min-size", p->name) == 0) {
-                if (ParseSizeStringU32(p->val, &content_inspect_min_size) < 0) {
-                    SCLogWarning(SC_ERR_SIZE_PARSE,
-                            "parsing content-inspect-min-size %s failed", p->val);
-                    content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
-                }
-                smtp_config.content_inspect_min_size = content_inspect_min_size;
-            }
-
-            if (strcasecmp("content-inspect-window", p->name) == 0) {
-                if (ParseSizeStringU32(p->val, &content_inspect_window) < 0) {
-                    SCLogWarning(SC_ERR_SIZE_PARSE,
-                            "parsing content-inspect-window %s failed", p->val);
-                    content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
-                }
-                smtp_config.content_inspect_window = content_inspect_window;
-            }
-        }
-    }
-
-    smtp_config.sbcfg.buf_size = content_limit ? content_limit : 256;
-
-    if (ConfGetBool("app-layer.protocols.smtp.raw-extraction",
-            &smtp_config.raw_extraction) != 1) {
-        smtp_config.raw_extraction = SMTP_RAW_EXTRACTION_DEFAULT_VALUE;
-    }
-    if (smtp_config.raw_extraction && smtp_config.decode_mime) {
-        SCLogError(SC_ERR_CONF_YAML_ERROR,
-                "\"decode-mime\" and \"raw-extraction\" "
-                "options can't be enabled at the same time, "
-                "disabling raw extraction");
-        smtp_config.raw_extraction = 0;
-    }
+    smtp_configure(&smtp_config);
+//    int ret = 0, val;
+//    intmax_t imval;
+//    uint32_t content_limit = 0;
+//    uint32_t content_inspect_min_size = 0;
+//    uint32_t content_inspect_window = 0;
+//
+//    ConfNode *config = ConfGetNode("app-layer.protocols.smtp.mime");
+//    if (config != NULL) {
+//
+//        ret = ConfGetChildValueBool(config, "decode-mime", &val);
+//        if (ret) {
+//            smtp_config.decode_mime = val;
+//        }
+//
+//        ret = ConfGetChildValueBool(config, "decode-base64", &val);
+//        if (ret) {
+//            smtp_config.mime_config.decode_base64 = val;
+//        }
+//
+//        ret = ConfGetChildValueBool(config, "decode-quoted-printable", &val);
+//        if (ret) {
+//            smtp_config.mime_config.decode_quoted_printable = val;
+//        }
+//
+//        ret = ConfGetChildValueInt(config, "header-value-depth", &imval);
+//        if (ret) {
+//            smtp_config.mime_config.header_value_depth = (uint32_t) imval;
+//        }
+//
+//        ret = ConfGetChildValueBool(config, "extract-urls", &val);
+//        if (ret) {
+//            smtp_config.mime_config.extract_urls = val;
+//        }
+//
+//        ret = ConfGetChildValueBool(config, "body-md5", &val);
+//        if (ret) {
+//            smtp_config.mime_config.body_md5 = val;
+//        }
+//    }
+//
+//    /* Pass mime config data to MimeDec API */
+//    MimeDecSetConfig(&smtp_config.mime_config);
+//
+//    smtp_config.content_limit = FILEDATA_CONTENT_LIMIT;
+//    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+//    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+//
+//    ConfNode *t = ConfGetNode("app-layer.protocols.smtp.inspected-tracker");
+//    ConfNode *p = NULL;
+//
+//    if (t != NULL) {
+//        TAILQ_FOREACH(p, &t->head, next) {
+//            if (strcasecmp("content-limit", p->name) == 0) {
+//                if (ParseSizeStringU32(p->val, &content_limit) < 0) {
+//                    SCLogWarning(SC_ERR_SIZE_PARSE,
+//                            "parsing content-limit %s failed", p->val);
+//                    content_limit = FILEDATA_CONTENT_LIMIT;
+//                }
+//                smtp_config.content_limit = content_limit;
+//            }
+//
+//            if (strcasecmp("content-inspect-min-size", p->name) == 0) {
+//                if (ParseSizeStringU32(p->val, &content_inspect_min_size) < 0) {
+//                    SCLogWarning(SC_ERR_SIZE_PARSE,
+//                            "parsing content-inspect-min-size %s failed", p->val);
+//                    content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+//                }
+//                smtp_config.content_inspect_min_size = content_inspect_min_size;
+//            }
+//
+//            if (strcasecmp("content-inspect-window", p->name) == 0) {
+//                if (ParseSizeStringU32(p->val, &content_inspect_window) < 0) {
+//                    SCLogWarning(SC_ERR_SIZE_PARSE,
+//                            "parsing content-inspect-window %s failed", p->val);
+//                    content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+//                }
+//                smtp_config.content_inspect_window = content_inspect_window;
+//            }
+//        }
+//    }
+//
+//    smtp_config.sbcfg.buf_size = content_limit ? content_limit : 256;
+//
+//    if (ConfGetBool("app-layer.protocols.smtp.raw-extraction",
+//            &smtp_config.raw_extraction) != 1) {
+//        smtp_config.raw_extraction = SMTP_RAW_EXTRACTION_DEFAULT_VALUE;
+//    }
+//    if (smtp_config.raw_extraction && smtp_config.decode_mime) {
+//        SCLogError(SC_ERR_CONF_YAML_ERROR,
+//                "\"decode-mime\" and \"raw-extraction\" "
+//                "options can't be enabled at the same time, "
+//                "disabling raw extraction");
+//        smtp_config.raw_extraction = 0;
+//    }
 
     SCReturn;
 }

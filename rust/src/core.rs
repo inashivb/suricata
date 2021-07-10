@@ -96,6 +96,8 @@ pub type AppLayerDecoderEventsFreeEventsFunc =
 
 pub enum SuricataStreamingBufferConfig {}
 
+// TODO impl a callback fn to set buf_size in SuricataStreamingBufferConfig
+
 pub type SCFileOpenFileWithId = extern "C" fn (
         file_container: &FileContainer,
         sbcfg: &SuricataStreamingBufferConfig,

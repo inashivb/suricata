@@ -118,6 +118,7 @@ exclude = [
     "MimeDecFreeField",
     "MimeDecGetConfig",
     "MimeDecSetConfig",
+    "MimeDecConfig",
 ]
 
 # Types of items that we'll generate. If empty, then all types of item are emitted.

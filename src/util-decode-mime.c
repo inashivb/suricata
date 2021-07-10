@@ -134,7 +134,7 @@ static void PrintChars(int log_level, const char *label, const uint8_t *src, uin
  */
 void MimeDecSetConfig(MimeDecConfig *config)
 {
-    if (config != NULL) {
+    if (config != NULL) {  // TODO Seems like this can be gone
         mime_dec_config = *config;
 
         /* Set to default */

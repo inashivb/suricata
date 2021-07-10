@@ -319,7 +319,7 @@ fn parse_access(access_str: &str) -> Result<DetectModbusRust, ()> {
     } else {
         return Ok(DetectModbusRust {
             access_type: Some(access_type),
-            ..Default::default()
+            ..Default::default()    // TODO example of default construct, can have exception for fields
         });
     };
 

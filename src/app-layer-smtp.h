@@ -58,117 +58,117 @@ enum {
     SMTP_DECODER_EVENT_UNPARSABLE_CONTENT,
 };
 
-typedef struct SMTPString_ {
-    uint8_t *str;
-    uint16_t len;
-
-    TAILQ_ENTRY(SMTPString_) next;
-} SMTPString;
-
-typedef struct SMTPTransaction_ {
-    /** id of this tx, starting at 0 */
-    uint64_t tx_id;
-
-    AppLayerTxData tx_data;
-
-    int done;
-    /** the first message contained in the session */
-    MimeDecEntity *msg_head;
-    /** the last message contained in the session */
-    MimeDecEntity *msg_tail;
-    /** the mime decoding parser state */
-    MimeDecParseState *mime_state;
-
-    AppLayerDecoderEvents *decoder_events;          /**< per tx events */
-    DetectEngineState *de_state;
-
-    /* MAIL FROM parameters */
-    uint8_t *mail_from;
-    uint16_t mail_from_len;
-
-    TAILQ_HEAD(, SMTPString_) rcpt_to_list;  /**< rcpt to string list */
-
-    TAILQ_ENTRY(SMTPTransaction_) next;
-} SMTPTransaction;
-
-typedef struct SMTPConfig {
-
-    int decode_mime;
-    MimeDecConfig mime_config;
-    uint32_t content_limit;
-    uint32_t content_inspect_min_size;
-    uint32_t content_inspect_window;
-
-    int raw_extraction;
-
-    StreamingBufferConfig sbcfg;
-} SMTPConfig;
-
-typedef struct SMTPState_ {
-    SMTPTransaction *curr_tx;
-    TAILQ_HEAD(, SMTPTransaction_) tx_list;  /**< transaction list */
-    uint64_t tx_cnt;
-    uint64_t toserver_data_count;
-    uint64_t toserver_last_data_stamp;
-
-    /* current input that is being parsed */
-    const uint8_t *input;
-    int32_t input_len;
-    uint8_t direction;
-
-    /* --parser details-- */
-    /** current line extracted by the parser from the call to SMTPGetline() */
-    const uint8_t *current_line;
-    /** length of the line in current_line.  Doesn't include the delimiter */
-    int32_t current_line_len;
-    uint8_t current_line_delimiter_len;
-
-    /** used to indicate if the current_line buffer is a malloced buffer.  We
-     * use a malloced buffer, if a line is fragmented */
-    uint8_t *tc_db;
-    int32_t tc_db_len;
-    uint8_t tc_current_line_db;
-    /** we have see LF for the currently parsed line */
-    uint8_t tc_current_line_lf_seen;
-
-    /** used to indicate if the current_line buffer is a malloced buffer.  We
-     * use a malloced buffer, if a line is fragmented */
-    uint8_t *ts_db;
-    int32_t ts_db_len;
-    uint8_t ts_current_line_db;
-    /** we have see LF for the currently parsed line */
-    uint8_t ts_current_line_lf_seen;
-
-    /** var to indicate parser state */
-    uint8_t parser_state;
-    /** current command in progress */
-    uint8_t current_command;
-    /** bdat chunk len */
-    uint32_t bdat_chunk_len;
-    /** bdat chunk idx */
-    uint32_t bdat_chunk_idx;
-
-    /* the request commands are store here and the reply handler uses these
-     * stored command in the buffer to match the reply(ies) with the command */
-    /** the command buffer */
-    uint8_t *cmds;
-    /** the buffer length */
-    uint16_t cmds_buffer_len;
-    /** no of commands stored in the above buffer */
-    uint16_t cmds_cnt;
-    /** index of the command in the buffer, currently in inspection by reply
-     *  handler */
-    uint16_t cmds_idx;
-
-    /* HELO of HELO message content */
-    uint16_t helo_len;
-    uint8_t *helo;
-
-    /* SMTP Mime decoding and file extraction */
-    /** the list of files sent to the server */
-    FileContainer *files_ts;
-    uint32_t file_track_id;
-} SMTPState;
+//typedef struct SMTPString_ {
+//    uint8_t *str;
+//    uint16_t len;
+//
+//    TAILQ_ENTRY(SMTPString_) next;
+//} SMTPString;
+//
+//typedef struct SMTPTransaction_ {
+//    /** id of this tx, starting at 0 */
+//    uint64_t tx_id;
+//
+//    AppLayerTxData tx_data;
+//
+//    int done;
+//    /** the first message contained in the session */
+//    MimeDecEntity *msg_head;
+//    /** the last message contained in the session */
+//    MimeDecEntity *msg_tail;
+//    /** the mime decoding parser state */
+//    MimeDecParseState *mime_state;
+//
+//    AppLayerDecoderEvents *decoder_events;          /**< per tx events */
+//    DetectEngineState *de_state;
+//
+//    /* MAIL FROM parameters */
+//    uint8_t *mail_from;
+//    uint16_t mail_from_len;
+//
+//    TAILQ_HEAD(, SMTPString_) rcpt_to_list;  /**< rcpt to string list */
+//
+//    TAILQ_ENTRY(SMTPTransaction_) next;
+//} SMTPTransaction;
+//
+//typedef struct SMTPConfig {
+//
+//    int decode_mime;
+//    MimeDecConfig mime_config;
+//    uint32_t content_limit;
+//    uint32_t content_inspect_min_size;
+//    uint32_t content_inspect_window;
+//
+//    int raw_extraction;
+//
+//    StreamingBufferConfig sbcfg;
+//} SMTPConfig;
+//
+//typedef struct SMTPState_ {
+//    SMTPTransaction *curr_tx;
+//    TAILQ_HEAD(, SMTPTransaction_) tx_list;  /**< transaction list */
+//    uint64_t tx_cnt;
+//    uint64_t toserver_data_count;
+//    uint64_t toserver_last_data_stamp;
+//
+//    /* current input that is being parsed */
+//    const uint8_t *input;
+//    int32_t input_len;
+//    uint8_t direction;
+//
+//    /* --parser details-- */
+//    /** current line extracted by the parser from the call to SMTPGetline() */
+//    const uint8_t *current_line;
+//    /** length of the line in current_line.  Doesn't include the delimiter */
+//    int32_t current_line_len;
+//    uint8_t current_line_delimiter_len;
+//
+//    /** used to indicate if the current_line buffer is a malloced buffer.  We
+//     * use a malloced buffer, if a line is fragmented */
+//    uint8_t *tc_db;
+//    int32_t tc_db_len;
+//    uint8_t tc_current_line_db;
+//    /** we have see LF for the currently parsed line */
+//    uint8_t tc_current_line_lf_seen;
+//
+//    /** used to indicate if the current_line buffer is a malloced buffer.  We
+//     * use a malloced buffer, if a line is fragmented */
+//    uint8_t *ts_db;
+//    int32_t ts_db_len;
+//    uint8_t ts_current_line_db;
+//    /** we have see LF for the currently parsed line */
+//    uint8_t ts_current_line_lf_seen;
+//
+//    /** var to indicate parser state */
+//    uint8_t parser_state;
+//    /** current command in progress */
+//    uint8_t current_command;
+//    /** bdat chunk len */
+//    uint32_t bdat_chunk_len;
+//    /** bdat chunk idx */
+//    uint32_t bdat_chunk_idx;
+//
+//    /* the request commands are store here and the reply handler uses these
+//     * stored command in the buffer to match the reply(ies) with the command */
+//    /** the command buffer */
+//    uint8_t *cmds;
+//    /** the buffer length */
+//    uint16_t cmds_buffer_len;
+//    /** no of commands stored in the above buffer */
+//    uint16_t cmds_cnt;
+//    /** index of the command in the buffer, currently in inspection by reply
+//     *  handler */
+//    uint16_t cmds_idx;
+//
+//    /* HELO of HELO message content */
+//    uint16_t helo_len;
+//    uint8_t *helo;
+//
+//    /* SMTP Mime decoding and file extraction */
+//    /** the list of files sent to the server */
+//    FileContainer *files_ts;
+//    uint32_t file_track_id;
+//} SMTPState;
 
 /* Create SMTP config structure */
 extern SMTPConfig smtp_config;
