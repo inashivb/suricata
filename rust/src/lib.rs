@@ -59,6 +59,8 @@ pub mod log;
 #[macro_use]
 pub mod core;
 
+pub mod rule_parser;
+
 #[macro_use]
 pub mod common;
 pub mod conf;

@@ -50,6 +50,7 @@
 #include "util-var-name.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "rust.h"
 
 /*
     xbits:set,bitname,track ip_pair,expire 60
@@ -82,76 +83,84 @@ void DetectXbitsRegister (void)
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex);
 }
 
-static int DetectIPPairbitMatchToggle (Packet *p, const DetectXbitsData *fd)
+static int DetectIPPairbitMatchToggle(Packet *p, const void *fd)
 {
     IPPair *pair = IPPairGetIPPairFromHash(&p->src, &p->dst);
     if (pair == NULL)
         return 0;
 
-    IPPairBitToggle(pair,fd->idx,p->ts.tv_sec + fd->expire);
+    uint32_t idx = rs_xbits_get_idx(fd);
+    uint32_t expire = rs_xbits_get_expire(fd);
+    IPPairBitToggle(pair, idx, p->ts.tv_sec + expire);
     IPPairRelease(pair);
     return 1;
 }
 
 /* return true even if bit not found */
-static int DetectIPPairbitMatchUnset (Packet *p, const DetectXbitsData *fd)
+static int DetectIPPairbitMatchUnset(Packet *p, const void *fd)
 {
     IPPair *pair = IPPairLookupIPPairFromHash(&p->src, &p->dst);
     if (pair == NULL)
         return 1;
 
-    IPPairBitUnset(pair,fd->idx);
+    uint32_t idx = rs_xbits_get_idx(fd);
+    IPPairBitUnset(pair, idx);
     IPPairRelease(pair);
     return 1;
 }
 
-static int DetectIPPairbitMatchSet (Packet *p, const DetectXbitsData *fd)
+static int DetectIPPairbitMatchSet(Packet *p, const void *fd)
 {
     IPPair *pair = IPPairGetIPPairFromHash(&p->src, &p->dst);
     if (pair == NULL)
         return 0;
 
-    IPPairBitSet(pair, fd->idx, p->ts.tv_sec + fd->expire);
+    uint32_t idx = rs_xbits_get_idx(fd);
+    uint32_t expire = rs_xbits_get_expire(fd);
+    IPPairBitSet(pair, idx, p->ts.tv_sec + expire);
     IPPairRelease(pair);
     return 1;
 }
 
-static int DetectIPPairbitMatchIsset (Packet *p, const DetectXbitsData *fd)
+static int DetectIPPairbitMatchIsset(Packet *p, const void *fd)
 {
     int r = 0;
     IPPair *pair = IPPairLookupIPPairFromHash(&p->src, &p->dst);
     if (pair == NULL)
         return 0;
 
-    r = IPPairBitIsset(pair,fd->idx,p->ts.tv_sec);
+    uint32_t idx = rs_xbits_get_idx(fd);
+    r = IPPairBitIsset(pair, idx, p->ts.tv_sec);
     IPPairRelease(pair);
     return r;
 }
 
-static int DetectIPPairbitMatchIsnotset (Packet *p, const DetectXbitsData *fd)
+static int DetectIPPairbitMatchIsnotset(Packet *p, const void *fd)
 {
     int r = 0;
     IPPair *pair = IPPairLookupIPPairFromHash(&p->src, &p->dst);
     if (pair == NULL)
         return 1;
 
-    r = IPPairBitIsnotset(pair,fd->idx,p->ts.tv_sec);
+    uint32_t idx = rs_xbits_get_idx(fd);
+    r = IPPairBitIsnotset(pair, idx, p->ts.tv_sec);
     IPPairRelease(pair);
     return r;
 }
 
-static int DetectXbitMatchIPPair(Packet *p, const DetectXbitsData *xd)
+static int DetectXbitMatchIPPair(Packet *p, const void *xd)
 {
-    switch (xd->cmd) {
-        case DETECT_XBITS_CMD_ISSET:
+    uint8_t cmd = rs_xbits_get_cmd(xd);
+    switch (cmd) {
+        case DETECT_BITS_CMD_ISSET:
             return DetectIPPairbitMatchIsset(p,xd);
-        case DETECT_XBITS_CMD_ISNOTSET:
+        case DETECT_BITS_CMD_ISNOTSET:
             return DetectIPPairbitMatchIsnotset(p,xd);
-        case DETECT_XBITS_CMD_SET:
+        case DETECT_BITS_CMD_SET:
             return DetectIPPairbitMatchSet(p,xd);
-        case DETECT_XBITS_CMD_UNSET:
+        case DETECT_BITS_CMD_UNSET:
             return DetectIPPairbitMatchUnset(p,xd);
-        case DETECT_XBITS_CMD_TOGGLE:
+        case DETECT_BITS_CMD_TOGGLE:
             return DetectIPPairbitMatchToggle(p,xd);
     }
     return 0;
@@ -163,18 +172,19 @@ static int DetectXbitMatchIPPair(Packet *p, const DetectXbitsData *xd)
  *        -1: error
  */
 
-static int DetectXbitMatch (DetectEngineThreadCtx *det_ctx, Packet *p, const Signature *s, const SigMatchCtx *ctx)
+static int DetectXbitMatch(
+        DetectEngineThreadCtx *det_ctx, Packet *p, const Signature *s, const SigMatchCtx *fd)
 {
-    const DetectXbitsData *fd = (const DetectXbitsData *)ctx;
     if (fd == NULL)
         return 0;
 
-    switch (fd->type) {
+    uint8_t vartype = rs_xbits_get_cmd(fd);
+    switch (vartype) {
         case VAR_TYPE_HOST_BIT:
-            return DetectXbitMatchHost(p, (const DetectXbitsData *)fd);
+            return DetectXbitMatchHost(p, (const void *)fd);
             break;
         case VAR_TYPE_IPPAIR_BIT:
-            return DetectXbitMatchIPPair(p, (const DetectXbitsData *)fd);
+            return DetectXbitMatchIPPair(p, (const void *)fd);
             break;
         default:
             break;
@@ -186,141 +196,43 @@ static int DetectXbitMatch (DetectEngineThreadCtx *det_ctx, Packet *p, const Sig
  *  \brief parse xbits rule options
  *  \retval 0 ok
  *  \retval -1 bad
- *  \param[out] cdout return DetectXbitsData structure or NULL if noalert
+ *  \param[out] cdout return void structure or NULL if noalert
  */
-static int DetectXbitParse(DetectEngineCtx *de_ctx,
-        const char *rawstr, DetectXbitsData **cdout)
+static int DetectXbitParse(DetectEngineCtx *de_ctx, const char *rawstr, void **cdout)
 {
-    DetectXbitsData *cd = NULL;
-    uint8_t fb_cmd = 0;
-    uint8_t hb_dir = 0;
-    int ret = 0, res = 0;
-    size_t pcre2len;
-    char fb_cmd_str[16] = "", fb_name[256] = "";
-    char hb_dir_str[16] = "";
-    enum VarTypes var_type = VAR_TYPE_NOT_SET;
-    uint32_t expire = DETECT_XBITS_EXPIRE_DEFAULT;
+    void *cd = rs_xbits_parse(rawstr, 0);
 
-    ret = DetectParsePcreExec(&parse_regex, rawstr, 0, 0);
-    if (ret != 2 && ret != 3 && ret != 4 && ret != 5) {
-        SCLogError("\"%s\" is not a valid setting for xbits.", rawstr);
+    if (cd == NULL) {
         return -1;
     }
-    SCLogDebug("ret %d, %s", ret, rawstr);
-    pcre2len = sizeof(fb_cmd_str);
-    res = pcre2_substring_copy_bynumber(
-            parse_regex.match, 1, (PCRE2_UCHAR8 *)fb_cmd_str, &pcre2len);
-    if (res < 0) {
-        SCLogError("pcre2_substring_copy_bynumber failed");
-        return -1;
-    }
-
-    if (ret >= 3) {
-        pcre2len = sizeof(fb_name);
-        res = pcre2_substring_copy_bynumber(
-                parse_regex.match, 2, (PCRE2_UCHAR8 *)fb_name, &pcre2len);
-        if (res < 0) {
-            SCLogError("pcre2_substring_copy_bynumber failed");
-            return -1;
-        }
-        if (ret >= 4) {
-            pcre2len = sizeof(hb_dir_str);
-            res = pcre2_substring_copy_bynumber(
-                    parse_regex.match, 3, (PCRE2_UCHAR8 *)hb_dir_str, &pcre2len);
-            if (res < 0) {
-                SCLogError("pcre2_substring_copy_bynumber failed");
+    uint8_t cmd = rs_xbits_get_cmd(cd);
+    const char *name = rs_xbits_get_name(cd);
+    uint8_t vartype = rs_xbits_get_vartype(cd);
+    switch (cmd) {
+        case DETECT_BITS_CMD_NOALERT: {
+            if (name != NULL) {
+                rs_bits_free(cd);
                 return -1;
             }
-            SCLogDebug("hb_dir_str %s", hb_dir_str);
-            if (strlen(hb_dir_str) > 0) {
-                if (strcmp(hb_dir_str, "ip_src") == 0) {
-                    hb_dir = DETECT_XBITS_TRACK_IPSRC;
-                    var_type = VAR_TYPE_HOST_BIT;
-                } else if (strcmp(hb_dir_str, "ip_dst") == 0) {
-                    hb_dir = DETECT_XBITS_TRACK_IPDST;
-                    var_type = VAR_TYPE_HOST_BIT;
-                } else if (strcmp(hb_dir_str, "ip_pair") == 0) {
-                    hb_dir = DETECT_XBITS_TRACK_IPPAIR;
-                    var_type = VAR_TYPE_IPPAIR_BIT;
-                } else {
-                    // TODO
-                    return -1;
-                }
-            }
-
-            if (ret >= 5) {
-                char expire_str[16] = "";
-                pcre2len = sizeof(expire_str);
-                res = pcre2_substring_copy_bynumber(
-                        parse_regex.match, 4, (PCRE2_UCHAR8 *)expire_str, &pcre2len);
-                if (res < 0) {
-                    SCLogError("pcre2_substring_copy_bynumber failed");
-                    return -1;
-                }
-                SCLogDebug("expire_str %s", expire_str);
-                if (StringParseUint32(&expire, 10, 0, (const char *)expire_str) < 0) {
-                    SCLogError("Invalid value for "
-                               "expire: \"%s\"",
-                            expire_str);
-                    return -1;
-                }
-                if (expire == 0) {
-                    SCLogError("expire must be bigger than 0");
-                    return -1;
-                }
-                SCLogDebug("expire %d", expire);
-            }
-        }
-    }
-
-    if (strcmp(fb_cmd_str,"noalert") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_NOALERT;
-    } else if (strcmp(fb_cmd_str,"isset") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_ISSET;
-    } else if (strcmp(fb_cmd_str,"isnotset") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_ISNOTSET;
-    } else if (strcmp(fb_cmd_str,"set") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_SET;
-    } else if (strcmp(fb_cmd_str,"unset") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_UNSET;
-    } else if (strcmp(fb_cmd_str,"toggle") == 0) {
-        fb_cmd = DETECT_XBITS_CMD_TOGGLE;
-    } else {
-        SCLogError("xbits action \"%s\" is not supported.", fb_cmd_str);
-        return -1;
-    }
-
-    switch (fb_cmd) {
-        case DETECT_XBITS_CMD_NOALERT: {
-            if (strlen(fb_name) != 0)
-                return -1;
             /* return ok, cd is NULL. Flag sig. */
             *cdout = NULL;
             return 0;
         }
-        case DETECT_XBITS_CMD_ISNOTSET:
-        case DETECT_XBITS_CMD_ISSET:
-        case DETECT_XBITS_CMD_SET:
-        case DETECT_XBITS_CMD_UNSET:
-        case DETECT_XBITS_CMD_TOGGLE:
-            if (strlen(fb_name) == 0)
+        case DETECT_BITS_CMD_ISNOTSET:
+        case DETECT_BITS_CMD_ISSET:
+        case DETECT_BITS_CMD_SET:
+        case DETECT_BITS_CMD_UNSET:
+        case DETECT_BITS_CMD_TOGGLE:
+        default:
+            if (strlen(name) == 0) {
+                rs_bits_free(cd);
                 return -1;
+            }
             break;
     }
 
-    cd = SCMalloc(sizeof(DetectXbitsData));
-    if (unlikely(cd == NULL))
-        return -1;
-
-    cd->idx = VarNameStoreSetupAdd(fb_name, var_type);
-    cd->cmd = fb_cmd;
-    cd->tracker = hb_dir;
-    cd->type = var_type;
-    cd->expire = expire;
-
-    SCLogDebug("idx %" PRIu32 ", cmd %s, name %s",
-        cd->idx, fb_cmd_str, strlen(fb_name) ? fb_name : "(none)");
-
+    uint32_t idx = VarNameStoreSetupAdd(name, vartype);
+    rs_xbits_set_idx(cd, idx);
     *cdout = cd;
     return 0;
 }
@@ -328,7 +240,7 @@ static int DetectXbitParse(DetectEngineCtx *de_ctx,
 int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     SigMatch *sm = NULL;
-    DetectXbitsData *cd = NULL;
+    void *cd = NULL;
 
     int result = DetectXbitParse(de_ctx, rawstr, &cd);
     if (result < 0) {
@@ -348,18 +260,20 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
     sm->type = DETECT_XBITS;
     sm->ctx = (void *)cd;
 
-    switch (cd->cmd) {
-        /* case DETECT_XBITS_CMD_NOALERT can't happen here */
+    uint8_t cmd = rs_xbits_get_cmd(sm->ctx);
 
-        case DETECT_XBITS_CMD_ISNOTSET:
-        case DETECT_XBITS_CMD_ISSET:
+    switch (cmd) {
+            /* case DETECT_BITS_CMD_NOALERT can't happen here */
+
+        case DETECT_BITS_CMD_ISNOTSET:
+        case DETECT_BITS_CMD_ISSET:
             /* checks, so packet list */
             SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
             break;
 
-        case DETECT_XBITS_CMD_SET:
-        case DETECT_XBITS_CMD_UNSET:
-        case DETECT_XBITS_CMD_TOGGLE:
+        case DETECT_BITS_CMD_SET:
+        case DETECT_BITS_CMD_UNSET:
+        case DETECT_BITS_CMD_TOGGLE:
             /* modifiers, only run when entire sig has matched */
             SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_POSTMATCH);
             break;
@@ -375,12 +289,7 @@ error:
 
 static void DetectXbitFree (DetectEngineCtx *de_ctx, void *ptr)
 {
-    DetectXbitsData *fd = (DetectXbitsData *)ptr;
-
-    if (fd == NULL)
-        return;
-
-    SCFree(fd);
+    rs_bits_free(ptr);
 }
 
 #ifdef UNITTESTS
@@ -400,57 +309,6 @@ static void XBitsTestShutdown(void)
     HostCleanup();
     IPPairCleanup();
     StorageCleanup();
-}
-
-
-static int XBitsTestParse01(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    de_ctx = DetectEngineCtxInit();
-    FAIL_IF_NULL(de_ctx);
-    de_ctx->flags |= DE_QUIET;
-    DetectXbitsData *cd = NULL;
-
-#define BAD_INPUT(str) \
-    FAIL_IF_NOT(DetectXbitParse(de_ctx, (str), &cd) == -1);
-
-    BAD_INPUT("alert");
-    BAD_INPUT("n0alert");
-    BAD_INPUT("nOalert");
-    BAD_INPUT("set,abc,track nonsense, expire 3600");
-    BAD_INPUT("set,abc,track ip_source, expire 3600");
-    BAD_INPUT("set,abc,track ip_src, expire -1");
-    BAD_INPUT("set,abc,track ip_src, expire 0");
-
-#undef BAD_INPUT
-
-#define GOOD_INPUT(str, command, trk, typ, exp)             \
-    FAIL_IF_NOT(DetectXbitParse(de_ctx, (str), &cd) == 0);  \
-    FAIL_IF_NULL(cd);                                       \
-    FAIL_IF_NOT(cd->cmd == (command));                      \
-    FAIL_IF_NOT(cd->tracker == (trk));                      \
-    FAIL_IF_NOT(cd->type == (typ));                         \
-    FAIL_IF_NOT(cd->expire == (exp));                       \
-    DetectXbitFree(NULL, cd);                               \
-    cd = NULL;
-
-    GOOD_INPUT("set,abc,track ip_pair",
-            DETECT_XBITS_CMD_SET,
-            DETECT_XBITS_TRACK_IPPAIR, VAR_TYPE_IPPAIR_BIT,
-            DETECT_XBITS_EXPIRE_DEFAULT);
-    GOOD_INPUT("set,abc,track ip_pair, expire 3600",
-            DETECT_XBITS_CMD_SET,
-            DETECT_XBITS_TRACK_IPPAIR, VAR_TYPE_IPPAIR_BIT,
-            3600);
-    GOOD_INPUT("set,abc,track ip_src, expire 1234",
-            DETECT_XBITS_CMD_SET,
-            DETECT_XBITS_TRACK_IPSRC, VAR_TYPE_HOST_BIT,
-            1234);
-
-#undef GOOD_INPUT
-
-    DetectEngineCtxFree(de_ctx);
-    PASS;
 }
 
 /**
@@ -531,8 +389,16 @@ static int XBitsTestSig02(void)
             "alert ip any any -> any any (xbits:unset,abc,track ip_src; content:\"GET \"; sid:4;)");
     FAIL_IF_NULL(s);
 
-    s = DetectEngineAppendSig(de_ctx,
-            "alert ip any any -> any any (xbits:toggle,abc,track ip_dst; content:\"GET \"; sid:5;)");
+    s = DetectEngineAppendSig(de_ctx, "alert ip any any -> any any (xbits:toggle,abc,track ip_dst, "
+                                      "noalert; content:\"GET \"; sid:5;)");
+    FAIL_IF_NOT_NULL(s);
+
+    s = DetectEngineAppendSig(de_ctx, "alert ip any any -> any any (xbits:toggle,abc,track ip_dst; "
+                                      "xbits:noalert; content:\"GET \"; sid:34;)");
+    FAIL_IF_NULL(s);
+
+    s = DetectEngineAppendSig(de_ctx, "alert ip any any -> any any (xbits:toggle,abc,track ip_dst; "
+                                      "content:\"GET \"; sid:53;)");
     FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx,
@@ -548,7 +414,6 @@ static int XBitsTestSig02(void)
  */
 static void XBitsRegisterTests(void)
 {
-    UtRegisterTest("XBitsTestParse01", XBitsTestParse01);
     UtRegisterTest("XBitsTestSig01", XBitsTestSig01);
     UtRegisterTest("XBitsTestSig02", XBitsTestSig02);
 }

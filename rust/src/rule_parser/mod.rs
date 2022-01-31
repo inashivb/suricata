@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2014 Open Information Security Foundation
+/* Copyright (C) 2022 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,16 +15,4 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
- *
- *  \author Victor Julien <victor@inliniac.net>
- */
-
-#ifndef __DETECT_XBITS_H__
-#define __DETECT_XBITS_H__
-
-#include "rust.h"
-void DetectXbitsRegister (void);
-
-#endif /* __DETECT_XBITS_H__ */
+pub mod xbits;
