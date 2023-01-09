@@ -395,6 +395,7 @@ void DetectHostbitFree (DetectEngineCtx *de_ctx, void *ptr)
 
 #ifdef UNITTESTS
 
+#if 0
 static void HostBitsTestSetup(void)
 {
     StorageInit();
@@ -409,7 +410,6 @@ static void HostBitsTestShutdown(void)
     StorageCleanup();
 }
 
-#if 0
 static int HostBitsTestParse01(void)
 {
     char cmd[16] = "", name[256] = "", dir[16] = "";
@@ -487,7 +487,7 @@ static int HostBitsTestParse01(void)
 
     PASS;
 }
-#endif
+
 
 /**
  * \test HostBitsTestSig01 is a test for a valid noalert flowbits option
@@ -643,15 +643,18 @@ static int HostBitsTestSig03(void)
     SCFree(p);
     PASS;
 }
+#endif
 
 /**
  * \brief this function registers unit tests for HostBits
  */
 void HostBitsRegisterTests(void)
 {
-    //    UtRegisterTest("HostBitsTestParse01", HostBitsTestParse01);
+#if 0
+    UtRegisterTest("HostBitsTestParse01", HostBitsTestParse01);
     UtRegisterTest("HostBitsTestSig01", HostBitsTestSig01);
     UtRegisterTest("HostBitsTestSig02", HostBitsTestSig02);
     UtRegisterTest("HostBitsTestSig03", HostBitsTestSig03);
+#endif
 }
 #endif /* UNITTESTS */

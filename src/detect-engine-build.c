@@ -20,6 +20,7 @@
 #include "detect-engine.h"
 #include "detect-parse.h"
 #include "detect-content.h"
+#include "rust.h"
 
 #include "detect-engine-build.h"
 #include "detect-engine-address.h"
@@ -231,7 +232,7 @@ int SignatureIsIPOnly(DetectEngineCtx *de_ctx, const Signature *s)
         /* we have enabled flowbits to be compatible with ip only sigs, as long
          * as the sig only has a "set" flowbits */
         if (sm->type == DETECT_FLOWBITS &&
-                (((DetectFlowbitsData *)sm->ctx)->cmd != DETECT_FLOWBITS_CMD_SET)) {
+                (rs_xbits_get_cmd(sm->ctx) != DETECT_FLOWBITS_CMD_SET)) {
             return 0;
         }
     }
@@ -242,7 +243,7 @@ int SignatureIsIPOnly(DetectEngineCtx *de_ctx, const Signature *s)
         /* we have enabled flowbits to be compatible with ip only sigs, as long
          * as the sig only has a "set" flowbits */
         if (sm->type == DETECT_FLOWBITS &&
-            (((DetectFlowbitsData *)sm->ctx)->cmd != DETECT_FLOWBITS_CMD_SET) ) {
+            (rs_xbits_get_cmd(sm->ctx) != DETECT_FLOWBITS_CMD_SET) ) {
             return 0;
         }
     }
