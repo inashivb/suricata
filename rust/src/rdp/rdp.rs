@@ -24,10 +24,12 @@ use crate::core::{ALPROTO_UNKNOWN, IPPROTO_TCP};
 use crate::flow::Flow;
 use crate::rdp::parser::*;
 use nom7::Err;
-use suricata_sys::sys::AppProto;
 use std;
 use std::collections::VecDeque;
-use tls_parser::{parse_tls_plaintext, TlsMessage, TlsMessageHandshake, TlsRecordType};
+use suricata_sys::sys::AppProto;
+use tls_parser::{
+    parse_tls_raw_record, TlsMessage, TlsMessageHandshake, TlsRecordType, TlsRecordsParser,
+};
 
 static mut ALPROTO_RDP: AppProto = ALPROTO_UNKNOWN;
 
@@ -172,30 +174,32 @@ impl RdpState {
         }
         let mut available = input;
 
-        loop {
-            if available.is_empty() {
-                return AppLayerResult::ok();
+        if self.tls_parsing {
+            let res = parse_tls_raw_record(available);
+            if res.is_err() {
+                return AppLayerResult::err();
             }
-            if self.tls_parsing {
-                match parse_tls_plaintext(available) {
-                    Ok((remainder, _tls)) => {
-                        // bytes available for further parsing are what remain
-                        available = remainder;
-                    }
-
-                    Err(Err::Incomplete(_)) => {
-                        // nom need not compatible with applayer need, request one more byte
-                        return AppLayerResult::incomplete(
-                            (input.len() - available.len()) as u32,
-                            (available.len() + 1) as u32,
-                        );
-                    }
-
-                    Err(Err::Failure(_)) | Err(Err::Error(_)) => {
-                        return AppLayerResult::err();
-                    }
+            let (_, raw_record) = res.unwrap();
+            let mut rparser = TlsRecordsParser::default();
+            match rparser.parse_record(raw_record) {
+                Ok((_remainder, _tls)) => {
+                    return AppLayerResult::ok();
                 }
-            } else {
+
+                Err(Err::Incomplete(_)) => {
+                    // don't consume anything, request one more byte
+                    return AppLayerResult::incomplete(0, (available.len() + 1) as u32);
+                }
+
+                Err(Err::Failure(_)) | Err(Err::Error(_)) => {
+                    return AppLayerResult::err();
+                }
+            }
+        } else {
+            loop {
+                if available.is_empty() {
+                    return AppLayerResult::ok();
+                }
                 // every message should be encapsulated within a T.123 tpkt
                 match parse_t123_tpkt(available) {
                     // success
@@ -266,55 +270,54 @@ impl RdpState {
         }
         let mut available = input;
 
-        loop {
-            if available.is_empty() {
-                return AppLayerResult::ok();
+        if self.tls_parsing {
+            let res = parse_tls_raw_record(available);
+            if res.is_err() {
+                return AppLayerResult::err();
             }
-            if self.tls_parsing {
-                match parse_tls_plaintext(available) {
-                    Ok((remainder, tls)) => {
-                        // bytes available for further parsing are what remain
-                        available = remainder;
-                        for message in &tls.msg {
-                            #[allow(clippy::single_match)]
-                            match message {
-                                TlsMessage::Handshake(TlsMessageHandshake::Certificate(
-                                    contents,
-                                )) => {
-                                    let mut chain = Vec::new();
-                                    for cert in &contents.cert_chain {
-                                        chain.push(CertificateBlob {
-                                            data: cert.data.to_vec(),
-                                        });
-                                    }
-                                    let tx =
-                                        self.new_tx(RdpTransactionItem::TlsCertificateChain(chain));
-                                    self.transactions.push_back(tx);
-                                    self.bypass_parsing = true;
+            let (_, raw_record) = res.unwrap();
+            let mut rparser = TlsRecordsParser::default();
+            match rparser.parse_record(raw_record.clone()) {
+                Ok((_remainder, messages)) => {
+                    for message in &messages {
+                        #[allow(clippy::single_match)]
+                        match message {
+                            TlsMessage::Handshake(TlsMessageHandshake::Certificate(contents)) => {
+                                let mut chain = Vec::new();
+                                for cert in &contents.cert_chain {
+                                    chain.push(CertificateBlob {
+                                        data: cert.data.to_vec(),
+                                    });
                                 }
-                                _ => {}
+                                let tx =
+                                    self.new_tx(RdpTransactionItem::TlsCertificateChain(chain));
+                                self.transactions.push_back(tx);
+                                self.bypass_parsing = true;
                             }
+                            _ => {}
                         }
                     }
-
-                    Err(Err::Incomplete(_)) => {
-                        // nom need not compatible with applayer need, request one more byte
-                        return AppLayerResult::incomplete(
-                            (input.len() - available.len()) as u32,
-                            (available.len() + 1) as u32,
-                        );
-                    }
-
-                    Err(Err::Failure(_)) | Err(Err::Error(_)) => {
-                        return AppLayerResult::err();
-                    }
+                    return AppLayerResult::ok();
                 }
-            } else {
+
+                Err(Err::Incomplete(_)) => {
+                    // don't consume anything, request one more byte
+                    return AppLayerResult::incomplete(0, (available.len() + 1) as u32);
+                }
+
+                Err(e) => {
+                    return AppLayerResult::err();
+                }
+            }
+        } else {
+            loop {
+                if available.is_empty() {
+                    return AppLayerResult::ok();
+                }
                 // every message should be encapsulated within a T.123 tpkt
                 match parse_t123_tpkt(available) {
                     // success
                     Ok((remainder, t123)) => {
-                        // bytes available for further parsing are what remain
                         available = remainder;
                         // evaluate message within the tpkt
                         match t123.child {
