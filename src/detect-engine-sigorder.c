@@ -149,6 +149,65 @@ static void SCSigRegisterSignatureOrderingFunc(DetectEngineCtx *de_ctx,
         prev->next = temp;
 }
 
+enum FbChainGNodeType {
+    FB_CHAIN_NODE_TYPE_SIG = 0,
+    FB_CHAIN_NODE_TYPE_FB,
+};
+
+typedef struct FbChainGNode_ {
+    uint32_t idx; /* internal index of flowbit or signature */
+    enum FbChainGNodeType;
+} FbChainGNode;
+
+/* Graph is unweighted and direction is determined by the dependency chain */
+typedef struct FlowbitsChainGraph_ {
+    uint32_t v;
+    FbChainGNode node;
+    FbChainGNode *alist;
+} FlowbitsChainGraph;
+
+static uint32_t FbChainGetTotal(SCSigSignatureWrapper *sw)
+{
+    uint32_t cnt = 0;
+
+    while (sw[DETECT_SIGORDER_FLOWBITS] == DETECT_FLOWBITS_TYPE_SET_READ) {
+        cnt++;
+        sw = sw->next;
+    }
+
+    return cnt;
+}
+
+static int FbChainGInsertNode(uint32_t v, FlowbitsChainGraph *fbcg, SCSigSignatureWrapper *sw)
+{
+}
+
+static int ProcessComplexFlowbitChains(SCSigSignatureWrapper *sw)
+{
+    uint32_t num_fb_chain = FbChainGetTotal(sw);
+    DEBUG_VALIDATE_BUG_ON(num_fb_chain == 0);
+    /* Step 1: Make a directed graph of flowbits and signatures as per the
+     * dependencies among them */
+    int order_type = sw[DETECT_SIGORDER_FLOWBITS];
+    FlowbitsChainGraph *fbcg = NULL;
+    while (num_fb_chain) {
+        // STODO
+        if (fbcg == NULL) {
+            fbcg = SCCalloc(num_fb_chain, FlowbitsChainGraph);
+            if (fbcg == NULL) {
+                SCLogNotice("Couldn't allocate memory for FlowbitsChainGraph");
+                return -1;
+            }
+        }
+        /* One for the signature */
+        FbChainGInsertNode(num_fb_chain, fbcg, sw);
+        /* A node/edge per flowbit referenced in the signature */
+        sw = sw->next;
+        order_type = sw[DETECT_SIGORDER_FLOWBITS];
+        num_fb_chain--;
+    }
+}
+
 /**
  * \brief Returns the flowbit type set for this signature.  If more than one
  *        flowbit has been set for the same rule, we return the flowbit type of
@@ -810,6 +869,7 @@ void SCSigOrderSignatures(DetectEngineCtx *de_ctx)
 
     SCLogDebug("ordering signatures in memory");
     SCSigSignatureWrapper *sigw = NULL;
+    SCSigSignatureWrapper *fb_set_read_sigw_list = NULL;
     SCSigSignatureWrapper *td_sigw_list = NULL; /* unified td list */
 
     SCSigSignatureWrapper *fw_pf_sigw_list = NULL; /* hook: packet_filter */
@@ -829,6 +889,10 @@ void SCSigOrderSignatures(DetectEngineCtx *de_ctx)
                 fw_af_sigw_list = sigw;
             }
         } else {
+            if (sigw[DETECT_SIGORDER_FLOWBITS] == DETECT_FLOWBITS_TYPE_SET_READ) {
+                sigw->next = fb_set_read_sigw_list; // STODO review this
+                fb_set_read_sigw_list = sigw;
+            }
             sigw->next = td_sigw_list;
             td_sigw_list = sigw;
         }
@@ -849,6 +913,9 @@ void SCSigOrderSignatures(DetectEngineCtx *de_ctx)
     if (td_sigw_list) {
         /* Sort the list */
         td_sigw_list = SCSigOrder(td_sigw_list, de_ctx->sc_sig_order_funcs);
+    }
+    if (fb_set_read_sigw_list) {
+        ProcessComplexFlowbitChains(fb_set_read_sigw_list);
     }
     /* Recreate the sig list in order */
     de_ctx->sig_list = NULL;
