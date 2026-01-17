@@ -20,6 +20,9 @@ use crate::smb::smb1_records::*;
 use crate::smb::smb::*;
 use crate::smb::events::*;
 use crate::smb::auth::*;
+use crate::core::sc_app_layer_parser_trigger_raw_stream_inspection;
+use crate::flow::Flow;
+use crate::direction::Direction;
 
 #[derive(Debug)]
 pub struct SessionSetupResponse {
@@ -95,7 +98,7 @@ pub fn smb1_session_setup_request(state: &mut SMBState, r: &SmbRecord, andx_offs
     }
 }
 
-fn smb1_session_setup_update_tx(tx: &mut SMBTransaction, r: &SmbRecord, andx_offset: usize)
+fn smb1_session_setup_update_tx(flow: *mut Flow, tx: &mut SMBTransaction, r: &SmbRecord, andx_offset: usize)
 {
     match parse_smb_response_setup_andx_record(&r.data[andx_offset-SMB1_HEADER_SIZE..]) {
         Ok((rem, _setup)) => {
@@ -111,9 +114,10 @@ fn smb1_session_setup_update_tx(tx: &mut SMBTransaction, r: &SmbRecord, andx_off
     tx.hdr = SMBCommonHdr::from1(r, SMBHDR_TYPE_HEADER); // to overwrite ssn_id 0
     tx.set_status(r.nt_status, r.is_dos_error);
     tx.response_done = true;
+    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
 }
 
-pub fn smb1_session_setup_response(state: &mut SMBState, r: &SmbRecord, andx_offset: usize)
+pub fn smb1_session_setup_response(state: &mut SMBState, flow: *mut Flow, r: &SmbRecord, andx_offset: usize)
 {
     // try exact match with session id already set (e.g. NTLMSSP AUTH phase)
     let found = r.ssn_id != 0 && match state.get_sessionsetup_tx(
@@ -121,7 +125,7 @@ pub fn smb1_session_setup_response(state: &mut SMBState, r: &SmbRecord, andx_off
                     r.ssn_id as u64, 0, r.multiplex_id as u64))
     {
         Some(tx) => {
-            smb1_session_setup_update_tx(tx, r, andx_offset);
+            smb1_session_setup_update_tx(flow, tx, r, andx_offset);
             SCLogDebug!("smb1_session_setup_response: tx {:?}", tx);
             true
         },
@@ -132,7 +136,7 @@ pub fn smb1_session_setup_response(state: &mut SMBState, r: &SmbRecord, andx_off
         if let Some(tx) = state.get_sessionsetup_tx(
                 SMBCommonHdr::new(SMBHDR_TYPE_HEADER, 0, 0, r.multiplex_id as u64))
         {
-            smb1_session_setup_update_tx(tx, r, andx_offset);
+            smb1_session_setup_update_tx(flow, tx, r, andx_offset);
             SCLogDebug!("smb1_session_setup_response: tx {:?}", tx);
         } else {
             SCLogDebug!("smb1_session_setup_response: tx not found for {:?}", r);

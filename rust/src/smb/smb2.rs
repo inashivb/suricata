@@ -18,6 +18,8 @@
 use nom8::Err;
 
 use crate::direction::Direction;
+use crate::core::sc_app_layer_parser_trigger_raw_stream_inspection;
+use crate::flow::Flow;
 use crate::smb::smb::*;
 use crate::smb::smb2_records::*;
 use crate::smb::smb2_session::*;
@@ -100,7 +102,7 @@ fn smb2_create_new_tx(cmd: u16) -> bool {
     }
 }
 
-fn smb2_read_response_record_generic(state: &mut SMBState, r: &Smb2Record)
+fn smb2_read_response_record_generic(state: &mut SMBState, flow: *mut Flow, r: &Smb2Record)
 {
     if smb2_create_new_tx(r.command) {
         let tx_hdr = SMBCommonHdr::from2(r, SMBHDR_TYPE_GENERICTX);
@@ -108,16 +110,17 @@ fn smb2_read_response_record_generic(state: &mut SMBState, r: &Smb2Record)
         if let Some(tx) = tx {
             tx.set_status(r.nt_status, false);
             tx.response_done = true;
+            sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
         }
     }
 }
 
-pub fn smb2_read_response_record(state: &mut SMBState, r: &Smb2Record, nbss_remaining: u32)
+pub fn smb2_read_response_record(state: &mut SMBState, flow: *mut Flow, r: &Smb2Record, nbss_remaining: u32)
 {
     let max_queue_size = unsafe { SMB_CFG_MAX_READ_QUEUE_SIZE };
     let max_queue_cnt = unsafe { SMB_CFG_MAX_READ_QUEUE_CNT };
 
-    smb2_read_response_record_generic(state, r);
+    smb2_read_response_record_generic(state, flow, r);
 
     match parse_smb2_response_read(r.data) {
         Ok((_, rd)) => {
@@ -222,7 +225,7 @@ pub fn smb2_read_response_record(state: &mut SMBState, r: &Smb2Record, nbss_rema
                     SCLogDebug!("SMBv2 DCERPC read");
                     let hdr = SMBCommonHdr::from2(r, SMBHDR_TYPE_HEADER);
                     let vercmd = SMBVerCmdStat::new2_with_ntstatus(SMB2_COMMAND_READ, r.nt_status);
-                    smb_read_dcerpc_record(state, vercmd, hdr, &file_guid, rd.data);
+                    smb_read_dcerpc_record(state, flow, vercmd, hdr, &file_guid, rd.data);
                 } else if is_pipe {
                     SCLogDebug!("non-DCERPC pipe");
                     state.set_skip(Direction::ToClient, nbss_remaining);
@@ -269,7 +272,7 @@ pub fn smb2_read_response_record(state: &mut SMBState, r: &Smb2Record, nbss_rema
     }
 }
 
-pub fn smb2_write_request_record(state: &mut SMBState, r: &Smb2Record, nbss_remaining: u32)
+pub fn smb2_write_request_record(state: &mut SMBState, flow: *mut Flow, r: &Smb2Record, nbss_remaining: u32)
 {
     let max_queue_size = unsafe { SMB_CFG_MAX_WRITE_QUEUE_SIZE };
     let max_queue_cnt = unsafe { SMB_CFG_MAX_WRITE_QUEUE_CNT };
@@ -277,8 +280,9 @@ pub fn smb2_write_request_record(state: &mut SMBState, r: &Smb2Record, nbss_rema
     SCLogDebug!("SMBv2/WRITE: request record");
     if smb2_create_new_tx(r.command) {
         let tx_key = SMBCommonHdr::from2(r, SMBHDR_TYPE_GENERICTX);
-        let tx = state.new_generic_tx(2, r.command, tx_key);
+        let tx = state.new_generic_tx(flow, 2, r.command, tx_key);
         tx.request_done = true;
+        sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
     }
     match parse_smb2_request_write(r.data) {
         Ok((_, wr)) => {
@@ -366,7 +370,7 @@ pub fn smb2_write_request_record(state: &mut SMBState, r: &Smb2Record, nbss_rema
                     SCLogDebug!("SMBv2 DCERPC write");
                     let hdr = SMBCommonHdr::from2(r, SMBHDR_TYPE_HEADER);
                     let vercmd = SMBVerCmdStat::new2(SMB2_COMMAND_WRITE);
-                    smb_write_dcerpc_record(state, vercmd, hdr, wr.data);
+                    smb_write_dcerpc_record(state, flow, vercmd, hdr, wr.data);
                 } else if is_pipe {
                     SCLogDebug!("non-DCERPC pipe: skip rest of the record");
                     state.set_skip(Direction::ToServer, nbss_remaining);
@@ -407,7 +411,7 @@ pub fn smb2_write_request_record(state: &mut SMBState, r: &Smb2Record, nbss_rema
     }
 }
 
-pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
+pub fn smb2_request_record(state: &mut SMBState, flow: *mut Flow, r: &Smb2Record)
 {
     SCLogDebug!("SMBv2 request record, command {} tree {} session {}",
             &smb2_command_string(r.command), r.tree_id, r.session_id);
@@ -430,9 +434,10 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                                 Some(n) => { n.to_vec() },
                                 None => { b"<unknown>".to_vec() },
                             };
-                            let tx = state.new_rename_tx(rd.guid.to_vec(), oldname, newname);
+                            let tx = state.new_rename_tx(flow, rd.guid.to_vec(), oldname, newname);
                             tx.hdr = tx_hdr;
                             tx.request_done = true;
+                            sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                             tx.vercmd.set_smb2_cmd(SMB2_COMMAND_SET_INFO);
                             true
                         }
@@ -454,9 +459,10 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                                     }
                                 },
                             };
-                            let tx = state.new_setfileinfo_tx(fname, rd.guid.to_vec(), rd.class as u16, rd.infolvl as u16, dis.delete);
+                            let tx = state.new_setfileinfo_tx(flow, fname, rd.guid.to_vec(), rd.class as u16, rd.infolvl as u16, dis.delete);
                             tx.hdr = tx_hdr;
                             tx.request_done = true;
+                            sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                             tx.vercmd.set_smb2_cmd(SMB2_COMMAND_SET_INFO);
                             true
                         }
@@ -478,7 +484,7 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
             have_si_tx
         },
         SMB2_COMMAND_IOCTL => {
-            smb2_ioctl_request_record(state, r);
+            smb2_ioctl_request_record(state, flow, r);
             true
         },
         SMB2_COMMAND_TREE_DISCONNECT => {
@@ -496,12 +502,13 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                 }
 
                 if state.get_negotiate_tx(2).is_none() {
-                    let tx = state.new_negotiate_tx(2);
+                    let tx = state.new_negotiate_tx(flow, 2);
                     if let Some(SMBTransactionTypeData::NEGOTIATE(ref mut tdn)) = tx.type_data {
                         tdn.dialects2 = dialects;
                         tdn.client_guid = Some(rd.client_guid.to_vec());
                     }
                     tx.request_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                 }
                 true
             } else {
@@ -524,6 +531,7 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
 
                 let tx = state.new_treeconnect_tx(name_key, name_val);
                 tx.request_done = true;
+                sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                 tx.vercmd.set_smb2_cmd(SMB2_COMMAND_TREE_CONNECT);
                 true
             } else {
@@ -560,7 +568,7 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                 state.ssn2vec_cache.put(name_key, cr.data.to_vec());
 
                 let tx_hdr = SMBCommonHdr::from2(r, SMBHDR_TYPE_GENERICTX);
-                let tx = state.new_create_tx(cr.data, cr.disposition, del, dir, tx_hdr);
+                let tx = state.new_create_tx(flow, cr.data, cr.disposition, del, dir, tx_hdr);
                 tx.vercmd.set_smb2_cmd(r.command);
                 SCLogDebug!("TS CREATE TX {} created", tx.id);
                 true
@@ -570,7 +578,7 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
             }
         },
         SMB2_COMMAND_WRITE => {
-            smb2_write_request_record(state, r, 0);
+            smb2_write_request_record(state, flow, r, 0);
             true // write handling creates both file tx and generic tx
         },
         SMB2_COMMAND_CLOSE => {
@@ -584,7 +592,9 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                         }
                     }
                     tx.request_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                     tx.response_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                     tx.set_status(SMB_NTSTATUS_SUCCESS, false);
                     true
                 } else {
@@ -597,7 +607,9 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
                         }
                     }
                     tx.request_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                     tx.response_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                     tx.set_status(SMB_NTSTATUS_SUCCESS, false);
                     true
                 } else {
@@ -618,14 +630,14 @@ pub fn smb2_request_record(state: &mut SMBState, r: &Smb2Record)
     /* if we don't have a tx, create it here (maybe) */
     if !have_tx && smb2_create_new_tx(r.command) {
         let tx_key = SMBCommonHdr::from2(r, SMBHDR_TYPE_GENERICTX);
-        let tx = state.new_generic_tx(2, r.command, tx_key);
+        let tx = state.new_generic_tx(flow, 2, r.command, tx_key);
         SCLogDebug!("TS TX {} command {} created with session_id {} tree_id {} message_id {}",
                 tx.id, r.command, r.session_id, r.tree_id, r.message_id);
         tx.set_events(events);
     }
 }
 
-pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
+pub fn smb2_response_record(state: &mut SMBState, flow: *mut Flow, r: &Smb2Record)
 {
     SCLogDebug!("SMBv2 response record, command {} status {} tree {} session {} message {}",
             &smb2_command_string(r.command), r.nt_status,
@@ -635,7 +647,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
 
     let have_tx = match r.command {
         SMB2_COMMAND_IOCTL => {
-            smb2_ioctl_response_record(state, r);
+            smb2_ioctl_response_record(state, flow, r);
             true
         },
         SMB2_COMMAND_SESSION_SETUP => {
@@ -661,7 +673,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
         SMB2_COMMAND_READ => {
             if r.nt_status == SMB_NTSTATUS_SUCCESS ||
                r.nt_status == SMB_NTSTATUS_BUFFER_OVERFLOW {
-                smb2_read_response_record(state, r, 0);
+                smb2_read_response_record(state, flow, r, 0);
             } else if r.nt_status == SMB_NTSTATUS_END_OF_FILE {
                 SCLogDebug!("SMBv2: read response => EOF");
 
@@ -680,6 +692,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                     }
                     tx.set_status(r.nt_status, false);
                     tx.request_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToServer as i32);
                 }
             } else {
                 SCLogDebug!("SMBv2 READ: status {}", r.nt_status);
@@ -705,6 +718,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                             tx.id, r.command, &smb2_command_string(r.command));
                         tx.set_status(r.nt_status, false);
                         tx.response_done = true;
+                        sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
 
                         if let Some(SMBTransactionTypeData::CREATE(ref mut tdn)) = tx.type_data {
                             tdn.create_ts = cr.create_ts.as_unix();
@@ -747,7 +761,8 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                             // update hdr now that we have a tree_id
                             tx.hdr = SMBCommonHdr::from2(r, SMBHDR_TYPE_HEADER);
                             tx.response_done = true;
-                            tx.set_status(r.nt_status, false);
+                            sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
+                           tx.set_status(r.nt_status, false);
                             true
                         },
                         None => { false },
@@ -766,6 +781,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                 let name_key = SMBCommonHdr::from2(r, SMBHDR_TYPE_TREE);
                 if let Some(tx) = state.get_treeconnect_tx(name_key) {
                     tx.response_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                     tx.set_status(r.nt_status, false);
                     true
                 } else {
@@ -802,6 +818,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                         }
                         tx.set_status(r.nt_status, false);
                         tx.response_done = true;
+                        sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                         true
                     },
                     None => { false },
@@ -814,6 +831,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                         }
                         tx.set_status(r.nt_status, false);
                         tx.response_done = true;
+                        sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                         true
                     },
                     None => { false },
@@ -840,6 +858,7 @@ pub fn smb2_response_record(state: &mut SMBState, r: &Smb2Record)
                         tx.id, r.command, &smb2_command_string(r.command));
                 if r.nt_status != SMB_NTSTATUS_PENDING {
                     tx.response_done = true;
+                    sc_app_layer_parser_trigger_raw_stream_inspection(flow, Direction::ToClient as i32);
                 }
                 tx.set_status(r.nt_status, false);
                 tx.set_events(events);
