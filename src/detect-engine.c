@@ -1770,7 +1770,7 @@ static int DetectEngineInspectRulePayloadMatches(
      * but not for a "dsize" signature */
     if (s->flags & SIG_FLAG_REQUIRE_STREAM) {
         int pmatch = 0;
-        if (p->flags & PKT_DETECT_HAS_STREAMDATA) {
+        if (!(s->flags & SIG_FLAG_REQUIRE_PACKET) && (p->flags & PKT_DETECT_HAS_STREAMDATA)) {
             pmatch = DetectEngineInspectStreamPayload(de_ctx, det_ctx, s, p->flow, p);
             if (pmatch) {
                 *alert_flags |= PACKET_ALERT_FLAG_STREAM_MATCH;
