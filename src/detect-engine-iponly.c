@@ -924,6 +924,12 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
         FatalError("Unable to allocate iponly signature tracking area");
     }
     io_ctx->sig_mapping_size = 0;
+
+    io_ctx->neg_sig_mapping = SCCalloc(1, de_ctx->sig_array_len * sizeof(uint32_t));
+    if (io_ctx->neg_sig_mapping == NULL) {
+        FatalError("Unable to allocate iponly negated signature tracking area");
+    }
+    io_ctx->neg_sig_mapping_size = 0;
 }
 
 SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
@@ -931,6 +937,14 @@ SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
     SigIntId loc = io_ctx->sig_mapping_size;
     io_ctx->sig_mapping[loc] = signum;
     io_ctx->sig_mapping_size++;
+    return loc;
+}
+
+SigIntId IPOnlyTrackNegSigNum(DetectEngineIPOnlyCtx *io_ctx, SigIntId signum)
+{
+    SigIntId loc = io_ctx->neg_sig_mapping_size;
+    io_ctx->neg_sig_mapping[loc] = signum;
+    io_ctx->neg_sig_mapping_size++;
     return loc;
 }
 
@@ -966,6 +980,10 @@ void IPOnlyDeinit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
     if (io_ctx->sig_mapping != NULL)
         SCFree(io_ctx->sig_mapping);
     io_ctx->sig_mapping = NULL;
+
+    if (io_ctx->neg_sig_mapping != NULL)
+        SCFree(io_ctx->neg_sig_mapping);
+    io_ctx->neg_sig_mapping = NULL;
 }
 
 static inline int IPOnlyMatchCompatSMs(
@@ -1412,6 +1430,22 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
 }
 
 /**
+ * \brief Check whether any item in an IPOnlyCIDRItem list is negated
+ *
+ * \param list Head of the IPOnlyCIDRItem list to scan
+ *
+ * \retval true if at least one item is negated, false otherwise
+ */
+static bool IPOnlyCIDRListHasNegation(const IPOnlyCIDRItem *list)
+{
+    for (const IPOnlyCIDRItem *item = list; item != NULL; item = item->next) {
+        if (item->negated)
+            return true;
+    }
+    return false;
+}
+
+/**
  * \brief Add a signature to the lists of Addresses in CIDR format (sorted)
  *        this step is necessary to build the radix tree with a hierarchical
  *        relation between nodes
@@ -1428,6 +1462,12 @@ void IPOnlyAddSignature(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx,
     SigIntId mapped_signum = IPOnlyTrackSigNum(io_ctx, s->iid);
     SCLogDebug("Adding IPs from rule: %" PRIu32 " (%s) as %" PRIu32 " mapped to %" PRIu32 "\n",
             s->id, s->msg, s->iid, mapped_signum);
+
+    /* Track signatures that carry negated IP addresses separately */
+    if (IPOnlyCIDRListHasNegation(s->init_data->cidr_src) ||
+            IPOnlyCIDRListHasNegation(s->init_data->cidr_dst)) {
+        IPOnlyTrackNegSigNum(io_ctx, s->iid);
+    }
     /* Set the internal signum to the list before merging */
     IPOnlyCIDRListSetSigNum(s->init_data->cidr_src, mapped_signum);
 

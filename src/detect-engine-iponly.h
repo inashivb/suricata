@@ -33,6 +33,7 @@ void IPOnlyPrint(DetectEngineCtx *, DetectEngineIPOnlyCtx *);
 void IPOnlyDeinit(DetectEngineCtx *, DetectEngineIPOnlyCtx *);
 void IPOnlyPrepare(DetectEngineCtx *);
 SigIntId IPOnlyTrackSigNum(DetectEngineIPOnlyCtx *, SigIntId);
+SigIntId IPOnlyTrackNegSigNum(DetectEngineIPOnlyCtx *, SigIntId);
 void IPOnlyAddSignature(DetectEngineCtx *, DetectEngineIPOnlyCtx *, Signature *);
 void IPOnlyRegisterTests(void);
 

@@ -886,6 +886,11 @@ typedef struct DetectEngineIPOnlyCtx_ {
      * stored in the radix trees */
     uint32_t *sig_mapping;
     uint32_t sig_mapping_size;
+
+    /* Same as sig_mapping, but only tracks the signatures that carry negated
+     * IP addresses */
+    uint32_t *neg_sig_mapping;
+    uint32_t neg_sig_mapping_size;
 } DetectEngineIPOnlyCtx;
 
 typedef struct DetectEngineLookupFlow_ {
