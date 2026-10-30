@@ -1189,10 +1189,12 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
 
                     if (src->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna);
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna,
+                                src->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna);
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna,
+                                src->negated != 0);
                     if (node4 == NULL)
                         SCLogError("Error inserting in the "
                                    "src ipv4 radix tree");
@@ -1205,10 +1207,12 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
 
                     if (src->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna);
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna,
+                                src->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna);
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna,
+                                src->negated != 0);
                     if (node4 == NULL) {
                         char tmpstr[64];
                         PrintInet(src->family, &src->ip[0], tmpstr, sizeof(tmpstr));
@@ -1314,10 +1318,12 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
 
                     if (dst->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna);
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna,
+                                dst->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna);
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna,
+                                dst->negated != 0);
                     if (node4 == NULL)
                         SCLogError("Error inserting in the dst "
                                    "ipv4 radix tree");
@@ -1330,10 +1336,12 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
 
                     if (dst->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna);
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna,
+                                dst->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna);
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna,
+                                dst->negated != 0);
 
                     if (node4 == NULL)
                         SCLogError("Error inserting in the dst "

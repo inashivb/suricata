@@ -181,13 +181,21 @@ void SCRadix4TreeRelease(SCRadix4Tree *tree, const SCRadix4Config *config)
  * \param tree       Pointer to the Radix4 tree
  * \param user       Pointer to the user data that has to be associated with the
  *                   key
+ * \param negated    If true, mark the node negated; otherwise mark it non-negated
  *
  * \retval node Pointer to the newly created node
  */
-SCRadix4Node *SCRadix4AddKeyIPV4(
-        SCRadix4Tree *tree, const SCRadix4Config *config, const uint8_t *key_stream, void *user)
+SCRadix4Node *SCRadix4AddKeyIPV4(SCRadix4Tree *tree, const SCRadix4Config *config,
+        const uint8_t *key_stream, void *user, bool negated)
 {
-    return AddKey(tree, config, key_stream, 32, user, false);
+    SCRadix4Node *node = AddKey(tree, config, key_stream, 32, user, false);
+    if (node != NULL) {
+        if (negated)
+            node->negated = true;
+        else
+            node->non_negated = true;
+    }
+    return node;
 }
 
 /**
@@ -199,13 +207,21 @@ SCRadix4Node *SCRadix4AddKeyIPV4(
  * \param user       Pointer to the user data that has to be associated with the
  *                   key
  * \param netmask    The netmask (cidr) if we are adding a netblock
+ * \param negated    If true, mark the node negated; otherwise mark it non-negated
  *
  * \retval node Pointer to the newly created node
  */
 SCRadix4Node *SCRadix4AddKeyIPV4Netblock(SCRadix4Tree *tree, const SCRadix4Config *config,
-        const uint8_t *key_stream, uint8_t netmask, void *user)
+        const uint8_t *key_stream, uint8_t netmask, void *user, bool negated)
 {
-    return AddKey(tree, config, key_stream, netmask, user, false);
+    SCRadix4Node *node = AddKey(tree, config, key_stream, netmask, user, false);
+    if (node != NULL) {
+        if (negated)
+            node->negated = true;
+        else
+            node->non_negated = true;
+    }
+    return node;
 }
 
 /**
@@ -215,6 +231,7 @@ SCRadix4Node *SCRadix4AddKeyIPV4Netblock(SCRadix4Tree *tree, const SCRadix4Confi
  * \param tree       Pointer to the Radix4 tree
  * \param user       Pointer to the user data that has to be associated with
  *                   the key
+ * \param negated    If true, mark the node negated; otherwise mark it non-negated
  *
  * \retval bool true if node was added, false otherwise
  *
@@ -223,8 +240,8 @@ SCRadix4Node *SCRadix4AddKeyIPV4Netblock(SCRadix4Tree *tree, const SCRadix4Confi
  * - SC_EINVAL: Parameter value error
  * - SC_ENOMEM: Memory allocation failed
  */
-bool SCRadix4AddKeyIPV4String(
-        SCRadix4Tree *tree, const SCRadix4Config *config, const char *str, void *user)
+bool SCRadix4AddKeyIPV4String(SCRadix4Tree *tree, const SCRadix4Config *config, const char *str,
+        void *user, bool negated)
 {
     uint32_t ip;
     uint8_t netmask = 32;
@@ -261,10 +278,15 @@ bool SCRadix4AddKeyIPV4String(
     }
     ip = addr.s_addr;
 
-    if (AddKey(tree, config, (uint8_t *)&ip, netmask, user, true) == NULL) {
+    SCRadix4Node *node = AddKey(tree, config, (uint8_t *)&ip, netmask, user, true);
+    if (node == NULL) {
         DEBUG_VALIDATE_BUG_ON(sc_errno == SC_OK);
         return false;
     }
+    if (negated)
+        node->negated = true;
+    else
+        node->non_negated = true;
     return true;
 }
 
@@ -378,7 +400,7 @@ static const SCRadix4Config ut_ip_radix4_config = { SCRadix4UtFree, NULL };
 
 #define ADD_IPV4(str)                                                                              \
     GET_IPV4((str));                                                                               \
-    SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&(sa).sin_addr, NULL);
+    SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&(sa).sin_addr, NULL, false);
 
 #define REM_IPV4(str)                                                                              \
     GET_IPV4((str));                                                                               \
@@ -387,7 +409,7 @@ static const SCRadix4Config ut_ip_radix4_config = { SCRadix4UtFree, NULL };
 #define ADD_IPV4_MASK(str, cidr)                                                                   \
     GET_IPV4((str));                                                                               \
     SCRadix4AddKeyIPV4Netblock(                                                                    \
-            &tree, &ut_ip_radix4_config, (uint8_t *)&(sa).sin_addr, (cidr), NULL);
+            &tree, &ut_ip_radix4_config, (uint8_t *)&(sa).sin_addr, (cidr), NULL, false);
 
 #define REM_IPV4_MASK(str, cidr)                                                                   \
     GET_IPV4((str));                                                                               \
@@ -545,10 +567,10 @@ static int SCRadix4TestIPV4NetblockInsertion10(void)
 
     GET_IPV4("192.171.128.0");
     node[0] = SCRadix4AddKeyIPV4Netblock(
-            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 24, NULL);
+            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 24, NULL, false);
 
     GET_IPV4("192.171.128.45");
-    node[1] = SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, NULL);
+    node[1] = SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, NULL, false);
 
     ADD_IPV4_MASK("192.171.0.0", 18);
     ADD_IPV4_MASK("192.175.0.0", 16);
@@ -598,7 +620,7 @@ static int SCRadix4TestIPV4NetblockInsertion11(void)
 
     GET_IPV4("0.0.0.0");
     SCRadix4Node *node = SCRadix4AddKeyIPV4Netblock(
-            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, NULL);
+            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, NULL, false);
     FAIL_IF_NULL(node);
 
     /* test for the existance of a key */
@@ -677,11 +699,11 @@ static int SCRadix4TestIPV4NetblockInsertion12(void)
 
     GET_IPV4("192.171.128.0");
     node[0] = SCRadix4AddKeyIPV4Netblock(
-            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 24, NULL);
+            &tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 24, NULL, false);
     FAIL_IF_NULL(node[0]);
 
     GET_IPV4("192.171.128.45");
-    node[1] = SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, NULL);
+    node[1] = SCRadix4AddKeyIPV4(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, NULL, false);
     FAIL_IF_NULL(node[1]);
 
     ADD_IPV4_MASK("192.171.0.0", 18);
@@ -732,7 +754,7 @@ static int SCRadix4TestIPV4NetBlocksAndBestSearch16(void)
         uint32_t *user = SCMalloc(sizeof(uint32_t));
         FAIL_IF_NULL(user);
         *user = i;
-        SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, i, user);
+        SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, i, user, false);
         void *user_data = NULL;
         SCRadix4Node *node = SCRadix4TreeFindBestMatch(&tree, (uint8_t *)&sa.sin_addr, &user_data);
         FAIL_IF_NULL(node);
@@ -758,7 +780,7 @@ static int SCRadix4TestIPV4NetBlocksAndBestSearch19(void)
     uint32_t *user = SCMalloc(sizeof(uint32_t));
     FAIL_IF_NULL(user);
     *user = 100;
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, user);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, user, false);
 
     GET_IPV4("192.168.1.15");
     SCRadix4Node *node = SCRadix4TreeFindBestMatch(&tree, (uint8_t *)&sa.sin_addr, &user_data);
@@ -771,7 +793,7 @@ static int SCRadix4TestIPV4NetBlocksAndBestSearch19(void)
     user = SCMalloc(sizeof(uint32_t));
     FAIL_IF_NULL(user);
     *user = 200;
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 8, user);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 8, user, false);
 
     GET_IPV4("177.168.1.15");
     node = SCRadix4TreeFindBestMatch(&tree, (uint8_t *)&sa.sin_addr, &user_data);
@@ -791,7 +813,7 @@ static int SCRadix4TestIPV4NetBlocksAndBestSearch19(void)
     user = SCMalloc(sizeof(uint32_t));
     FAIL_IF_NULL(user);
     *user = 300;
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 12, user);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 12, user, false);
 
     GET_IPV4("177.168.1.15");
     node = SCRadix4TreeFindBestMatch(&tree, (uint8_t *)&sa.sin_addr, &user_data);
@@ -854,15 +876,15 @@ static int SCRadix4TestIPV4NetblockInsertion26(void)
     FAIL_IF_NULL(str);
     SCRadix4Tree tree = SCRadix4TreeInitialize();
     GET_IPV4("0.0.0.0");
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, str);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 0, str, false);
     str = SCStrdup("Hello2");
     FAIL_IF_NULL(str);
     GET_IPV4("176.0.0.1");
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 5, str);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 5, str, false);
     str = SCStrdup("Hello3");
     FAIL_IF_NULL(str);
     GET_IPV4("0.0.0.0");
-    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 7, str);
+    SCRadix4AddKeyIPV4Netblock(&tree, &ut_ip_radix4_config, (uint8_t *)&sa.sin_addr, 7, str, false);
     /* test for the existance of a key */
     void *retptr = NULL;
     tmp = SCRadix4TreeFindBestMatch(&tree, (uint8_t *)&sa.sin_addr, &retptr);

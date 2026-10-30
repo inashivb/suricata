@@ -159,7 +159,7 @@ int SCHInfoAddHostOSInfo(const char *host_os, const char *host_os_ip_range, int 
 
     if (strchr(ip_str, ':') == NULL) {
         if (!SCRadix4AddKeyIPV4String(
-                    &sc_hinfo_tree4, &ospolicy_radix4_config, ip_str, user_data)) {
+                    &sc_hinfo_tree4, &ospolicy_radix4_config, ip_str, user_data, false)) {
             if (sc_errno == SC_EEXIST) {
                 SCLogError("duplicate ipv4 address '%s'", ip_str);
             } else {

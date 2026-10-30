@@ -100,8 +100,8 @@ static void SRepCIDRAddNetblock(SRepCIDRTree *cidr_ctx, char *ip, int cat, uint8
 
     } else {
         SCLogDebug("adding ipv4 host %s", ip);
-        if (!SCRadix4AddKeyIPV4String(
-                    &cidr_ctx->srep_ipv4_tree[cat], &iprep_radix4_config, ip, (void *)user_data)) {
+        if (!SCRadix4AddKeyIPV4String(&cidr_ctx->srep_ipv4_tree[cat], &iprep_radix4_config, ip,
+                    (void *)user_data, false)) {
             SCFree(user_data);
             if (sc_errno != SC_EEXIST)
                 SCLogWarning("failed to add ipv4 host %s", ip);

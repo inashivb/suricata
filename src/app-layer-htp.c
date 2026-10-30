@@ -2033,7 +2033,7 @@ static void HTPConfigParseParameters(HTPCfgRec *cfg_prec, SCConfNode *s, struct 
                     SCLogDebug("LIBHTP adding ipv4 server %s at %s: %p",
                                s->name, pval->val, cfg_prec->cfg);
                     if (!SCRadix4AddKeyIPV4String(
-                                &tree->ipv4, &htp_radix4_cfg, pval->val, cfg_prec)) {
+                                &tree->ipv4, &htp_radix4_cfg, pval->val, cfg_prec, false)) {
                         SCLogWarning("LIBHTP failed to add ipv4 server %s, ignoring", pval->val);
                     }
                 } /* else - if (strchr(pval->val, ':') != NULL) */

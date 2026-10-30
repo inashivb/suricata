@@ -64,7 +64,7 @@ static void DefragPolicyAddHostInfo(const char *host_ip_range, uint64_t timeout)
     } else {
         SCLogDebug("adding ipv4 host %s", host_ip_range);
         if (!SCRadix4AddKeyIPV4String(
-                    &defrag4_tree, &defrag4_config, host_ip_range, (void *)user_data)) {
+                    &defrag4_tree, &defrag4_config, host_ip_range, (void *)user_data, false)) {
             if (sc_errno != SC_EEXIST) {
                 SCLogWarning("failed to add ipv4 host %s", host_ip_range);
             }

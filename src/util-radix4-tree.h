@@ -48,6 +48,8 @@ typedef struct SCRadix4Node_ {
     /** the key that has been stored in the tree */
     uint8_t prefix_stream[4];
 
+    bool negated;
+    bool non_negated;
     /** User data that is associated with this key. We need a user data field
      * for each netblock value possible since one ip can be associated
      * with any of the 32 netblocks. */
@@ -83,10 +85,12 @@ typedef struct SCRadix4Config_ {
 SCRadix4Tree SCRadix4TreeInitialize(void);
 void SCRadix4TreeRelease(SCRadix4Tree *, const SCRadix4Config *);
 
-SCRadix4Node *SCRadix4AddKeyIPV4(SCRadix4Tree *, const SCRadix4Config *, const uint8_t *, void *);
+SCRadix4Node *SCRadix4AddKeyIPV4(
+        SCRadix4Tree *, const SCRadix4Config *, const uint8_t *, void *, bool);
 SCRadix4Node *SCRadix4AddKeyIPV4Netblock(
-        SCRadix4Tree *, const SCRadix4Config *, const uint8_t *, uint8_t, void *);
-bool SCRadix4AddKeyIPV4String(SCRadix4Tree *, const SCRadix4Config *, const char *, void *);
+        SCRadix4Tree *, const SCRadix4Config *, const uint8_t *, uint8_t, void *, bool);
+bool SCRadix4AddKeyIPV4String(
+        SCRadix4Tree *, const SCRadix4Config *, const char *, void *, bool);
 
 void SCRadix4RemoveKeyIPV4Netblock(
         SCRadix4Tree *, const SCRadix4Config *, const uint8_t *, uint8_t);
