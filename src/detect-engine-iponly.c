@@ -547,14 +547,24 @@ static void IPOnlyCIDRListPrint(IPOnlyCIDRItem *tmphead)
 }
 #endif
 
-/** \brief user data for storing signature id's in the radix tree
- *
+/**
  *  Bit array representing signature internal id's (Signature::num).
  */
 typedef struct SigNumArray_ {
     uint8_t *array; /* bit array of sig nums */
     uint32_t size;  /* size in bytes of the array */
 } SigNumArray;
+
+/** \brief user data stored on each IPv4 radix-tree node
+ *
+ *  Wraps the signature bit arrays carried by a node. For now only \c sids is
+ *  populated (it plays the role the bare SigNumArray used to); negated_sids is
+ *  reserved for upcoming work and stays empty.
+ */
+typedef struct NodeUserData_ {
+    SigNumArray sids; /* all sids carried down to this node */
+    SigNumArray negated_sids; /* sids that carried negation for this node */
+} NodeUserData;
 
 /**
  * \brief This function print a SigNumArray, it's used with the
@@ -645,6 +655,95 @@ static void SigNumArrayFree(void *tmp)
         SCFree(sna->array);
 
     SCFree(sna);
+}
+
+/**
+ * \brief Create a new NodeUserData for the IPv4 radix tree, with its sids
+ *        bitarray sized to io_ctx->max_idx. negated_sids is left empty until
+ *        it is needed.
+ *
+ * \param de_ctx Pointer to the current detection context
+ * \param io_ctx Pointer to the current ip only context
+ *
+ * \retval NodeUserData address of the new instance
+ */
+static NodeUserData *NodeUserDataNew(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx)
+{
+    NodeUserData *new = SCCalloc(1, sizeof(NodeUserData));
+
+    if (unlikely(new == NULL)) {
+        FatalError("Fatal error encountered in NodeUserDataNew. Exiting...");
+    }
+
+    new->sids.array = SCCalloc(1, io_ctx->max_idx / 8 + 1);
+    if (new->sids.array == NULL) {
+        exit(EXIT_FAILURE);
+    }
+    new->sids.size = io_ctx->max_idx / 8 + 1;
+
+    SCLogDebug("max idx= %u", io_ctx->max_idx);
+
+    return new;
+}
+
+/**
+ * \brief Create a new NodeUserData with the same sids bitarray as the argument
+ *
+ * \param orig Pointer to the original NodeUserData to copy
+ *
+ * \retval NodeUserData address of the new instance
+ */
+static NodeUserData *NodeUserDataCopy(NodeUserData *orig)
+{
+    NodeUserData *new = SCCalloc(1, sizeof(NodeUserData));
+
+    if (unlikely(new == NULL)) {
+        FatalError("Fatal error encountered in NodeUserDataCopy. Exiting...");
+    }
+
+    new->sids.size = orig->sids.size;
+
+    new->sids.array = SCMalloc(orig->sids.size);
+    if (new->sids.array == NULL) {
+        exit(EXIT_FAILURE);
+    }
+
+    memcpy(new->sids.array, orig->sids.array, orig->sids.size);
+    return new;
+}
+
+/**
+ * \brief This function free() a NodeUserData and its bitarrays
+ * \param tmp Pointer to the NodeUserData to free
+ */
+static void NodeUserDataFree(void *tmp)
+{
+    NodeUserData *nud = (NodeUserData *)tmp;
+
+    if (nud == NULL)
+        return;
+
+    if (nud->sids.array != NULL)
+        SCFree(nud->sids.array);
+    if (nud->negated_sids.array != NULL)
+        SCFree(nud->negated_sids.array);
+
+    SCFree(nud);
+}
+
+/**
+ * \brief Print a NodeUserData (its sids bitarray); used by the radix tree
+ *        print function to help debugging
+ * \param tmp Pointer to the NodeUserData
+ */
+static void NodeUserDataPrint(void *tmp)
+{
+    NodeUserData *nud = (NodeUserData *)tmp;
+
+    if (nud == NULL)
+        return;
+
+    SigNumArrayPrint(&nud->sids);
 }
 
 /**
@@ -903,7 +1002,7 @@ error:
     return -1;
 }
 
-static const SCRadix4Config iponly_radix4_config = { SigNumArrayFree, SigNumArrayPrint };
+static const SCRadix4Config iponly_radix4_config = { NodeUserDataFree, NodeUserDataPrint };
 static const SCRadix6Config iponly_radix6_config = { SigNumArrayFree, SigNumArrayPrint };
 
 /**
@@ -1040,8 +1139,17 @@ void IPOnlyMatchPacket(ThreadVars *tv, const DetectEngineCtx *de_ctx,
                 &io_ctx->tree_ipv6dst, (uint8_t *)&GET_IPV6_DST_ADDR(p), &user_data_dst);
     }
 
-    src = user_data_src;
-    dst = user_data_dst;
+    /* The IPv4 trees store a NodeUserData per node; reach its sids bitarray.
+     * The IPv6 trees still store a bare SigNumArray. */
+    if (p->src.family == AF_INET)
+        src = (user_data_src != NULL) ? &((NodeUserData *)user_data_src)->sids : NULL;
+    else
+        src = user_data_src;
+
+    if (p->dst.family == AF_INET)
+        dst = (user_data_dst != NULL) ? &((NodeUserData *)user_data_dst)->sids : NULL;
+    else
+        dst = user_data_dst;
 
     if (src == NULL || dst == NULL)
         SCReturn;
@@ -1202,16 +1310,16 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                     SCLogDebug("best match not found");
 
                     /* Not found, insert a new one */
-                    SigNumArray *sna = SigNumArrayNew(de_ctx, &de_ctx->io_ctx);
-                    IPOnlyPrepareUpdateBitarray(src, sna);
+                    NodeUserData *nud = NodeUserDataNew(de_ctx, &de_ctx->io_ctx);
+                    IPOnlyPrepareUpdateBitarray(src, &nud->sids);
 
                     if (src->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna,
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], nud,
                                 src->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna,
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, nud,
                                 src->negated != 0);
                     if (node4 == NULL)
                         SCLogError("Error inserting in the "
@@ -1220,16 +1328,16 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                     SCLogDebug("Best match found");
 
                     /* Found, copy the sig num table, add this signum and insert */
-                    SigNumArray *sna = SigNumArrayCopy((SigNumArray *)user_data);
-                    IPOnlyPrepareUpdateBitarray(src, sna);
+                    NodeUserData *nud = NodeUserDataCopy((NodeUserData *)user_data);
+                    IPOnlyPrepareUpdateBitarray(src, &nud->sids);
 
                     if (src->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], sna,
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], nud,
                                 src->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4src,
-                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, sna,
+                                &iponly_radix4_config, (uint8_t *)&src->ip[0], src->netmask, nud,
                                 src->negated != 0);
                     if (node4 == NULL) {
                         char tmpstr[64];
@@ -1244,8 +1352,8 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                 SCLogDebug("Exact match found");
 
                 /* it's already inserted. Update it */
-                SigNumArray *sna = (SigNumArray *)user_data;
-                IPOnlyPrepareUpdateBitarray(src, sna);
+                NodeUserData *nud = (NodeUserData *)user_data;
+                IPOnlyPrepareUpdateBitarray(src, &nud->sids);
             }
         } else if (src->family == AF_INET6) {
             SCLogDebug("To IPv6");
@@ -1331,16 +1439,16 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                     SCLogDebug("Best match not found");
 
                     /** Not found, insert a new one */
-                    SigNumArray *sna = SigNumArrayNew(de_ctx, &de_ctx->io_ctx);
-                    IPOnlyPrepareUpdateBitarray(dst, sna);
+                    NodeUserData *nud = NodeUserDataNew(de_ctx, &de_ctx->io_ctx);
+                    IPOnlyPrepareUpdateBitarray(dst, &nud->sids);
 
                     if (dst->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna,
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], nud,
                                 dst->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna,
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, nud,
                                 dst->negated != 0);
                     if (node4 == NULL)
                         SCLogError("Error inserting in the dst "
@@ -1349,16 +1457,16 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                     SCLogDebug("Best match found");
 
                     /* Found, copy the sig num table, add this signum and insert */
-                    SigNumArray *sna = SigNumArrayCopy((SigNumArray *)user_data);
-                    IPOnlyPrepareUpdateBitarray(dst, sna);
+                    NodeUserData *nud = NodeUserDataCopy((NodeUserData *)user_data);
+                    IPOnlyPrepareUpdateBitarray(dst, &nud->sids);
 
                     if (dst->netmask == 32)
                         node4 = SCRadix4AddKeyIPV4(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], sna,
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], nud,
                                 dst->negated != 0);
                     else
                         node4 = SCRadix4AddKeyIPV4Netblock(&de_ctx->io_ctx.tree_ipv4dst,
-                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, sna,
+                                &iponly_radix4_config, (uint8_t *)&dst->ip[0], dst->netmask, nud,
                                 dst->negated != 0);
 
                     if (node4 == NULL)
@@ -1369,8 +1477,8 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx)
                 SCLogDebug("Exact match found");
 
                 /* it's already inserted. Update it */
-                SigNumArray *sna = (SigNumArray *)user_data;
-                IPOnlyPrepareUpdateBitarray(dst, sna);
+                NodeUserData *nud = (NodeUserData *)user_data;
+                IPOnlyPrepareUpdateBitarray(dst, &nud->sids);
             }
         } else if (dst->family == AF_INET6) {
             SCLogDebug("To IPv6");
