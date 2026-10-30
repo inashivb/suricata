@@ -41,6 +41,10 @@
 #define RADIX_CONFIG_TYPE           SCRadix4Config
 #define RADIX_TREE_COMPARE_CALLBACK SCRadix4TreeCompareFunc
 
+/* Only the IPv4 node carries negated/non_negated flags for now, so the
+ * negation-aware lookup logic in the shared template is IPv4-only. */
+#define RADIX_NODE_HAS_NEGATION
+
 static void PrintUserdata(SCRadix4Node *node, int level, void (*PrintData)(void *));
 
 static inline void AddNetmaskToMasks(SCRadix4Node *node, int netmask)

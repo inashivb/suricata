@@ -757,6 +757,16 @@ static inline RADIX_NODE_TYPE *FindKeyIPNetblock(const uint8_t *key_stream, RADI
         if (SCMemcmp(node->prefix_stream, tmp_stream, sizeof(tmp_stream)) == 0) {
             if (ContainNetmaskAndSetUserData(node, m, false, user_data_result)) {
                 *out_netmask = m;
+#ifdef RADIX_NODE_HAS_NEGATION
+                if (node->negated == true) {
+                    if (node->non_negated == true) {
+                        /* do nothing, let the control fall through */
+                    } else {
+                        /* the match happened but with a negated only node */
+                        return NULL;
+                    }
+                }
+#endif
                 return node;
             }
         }
@@ -804,6 +814,16 @@ static RADIX_NODE_TYPE *FindKey(const RADIX_TREE_TYPE *tree, const uint8_t *key_
         if (ContainNetmaskAndSetUserData(node, netmask, true, user_data_result)) {
             SCLogDebug("contains netmask etc");
             *out_netmask = netmask;
+#ifdef RADIX_NODE_HAS_NEGATION
+            if (node->negated == true) {
+                if (node->non_negated == true) {
+                    /* do nothing, let the control fall through */
+                } else {
+                    /* the match happened but with a negated only node */
+                    return NULL;
+                }
+            }
+#endif
             return node;
         }
     }

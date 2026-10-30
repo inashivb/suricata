@@ -1170,6 +1170,7 @@ void IPOnlyMatchPacket(ThreadVars *tv, const DetectEngineCtx *de_ctx,
         for (uint8_t i = 0; i < 8; i++, bitarray = bitarray >> 1) {
             if (bitarray & 0x01) {
                 const Signature *s = de_ctx->sig_array[io_ctx->sig_mapping[u * 8 + i]];
+                // STODO neg_sig_mapping matches here except the node's negated ip addresses
                 if (s->proto) {
                     if ((s->proto->flags & DETECT_PROTO_IPV4) && !PacketIsIPv4(p)) {
                         SCLogDebug("ip version didn't match");
@@ -1259,7 +1260,15 @@ static void IPOnlySigNumArrayUpdate(const IPOnlyCIDRItem *src, SigNumArray *sna)
 
 static void IPOnlyPrepareUpdateBitarray(const IPOnlyCIDRItem *src, NodeUserData *nud)
 {
-    IPOnlySigNumArrayUpdate(src, &nud->sids);
+    uint8_t tmp = (uint8_t)(1 << (src->signum % 8));
+    if (src->negated > 0) {
+        /* Unset it */
+        nud->sids.array[src->signum / 8] &= ~tmp;
+        nud->negated_sids.array[src->signum / 8] |= tmp;
+    } else {
+        /* Set it */
+        nud->sids.array[src->signum / 8] |= tmp;
+    }
 }
 
 /**
